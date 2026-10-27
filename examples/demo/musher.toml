@@ -1,0 +1,32 @@
+# A no-API-key demo using the built-in `shell` agent: each prompt is a shell command.
+[settings]
+agent    = "shell"
+parallel = 3
+retries  = 2
+
+[[task]]
+id     = "schema"
+prompt = "sleep 2; printf 'users(id, name)\n' > schema.sql"
+
+[[task]]
+id     = "styles"
+prompt = "sleep 3; printf 'body { margin: 0 }\n' > app.css"
+
+# Fails its check on the first attempt, then "fixes" itself — the verify-and-fix loop.
+[[task]]
+id     = "flaky-test"
+prompt = "sleep 1; if [ -f .attempted ]; then echo pass > result.txt; else touch .attempted; fi"
+check  = "grep -q pass result.txt"
+
+# Stacked on schema's branch: schema.sql is already there when this starts.
+[[task]]
+id     = "api"
+after  = ["schema"]
+prompt = "sleep 2; grep -q users schema.sql && printf 'GET /users\n' > api.txt"
+check  = "test -f api.txt"
+
+[[task]]
+id      = "deploy"
+after   = ["api", "styles"]
+prompt  = "test -f FIXED || { echo 'missing FIXED marker' >&2; exit 1; }; echo shipped > deploy.txt"
+retries = 0

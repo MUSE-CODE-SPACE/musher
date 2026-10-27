@@ -1,0 +1,35 @@
+# A realistic plan for a Node project. Copy to your repo root and adapt.
+[settings]
+parallel   = 3
+agent      = "claude"
+timeout    = "40m"
+retries    = 2
+setup      = "npm ci --silent"
+budget_usd = 10.0
+allow      = ["Bash(npm run lint:*)", "Bash(npx tsc:*)"]
+
+[[task]]
+id     = "health"
+prompt = """
+Add GET /health that returns {"ok": true, "version": <package.json version>}.
+Add a test next to the other route tests.
+"""
+check  = "npm test -- --silent"
+
+[[task]]
+id     = "rate-limit"
+agent  = "codex"
+prompt = "Add an in-memory rate limiter (10 req/min per IP) to POST /login, with tests."
+check  = "npm test -- --silent"
+
+[[task]]
+id     = "sdk"
+after  = ["health"]
+prompt = "Add healthCheck() to src/sdk/client.ts that calls /health and returns the parsed body. Test it."
+check  = "npm test -- --silent && npx tsc --noEmit"
+
+[[task]]
+id     = "docs"
+after  = ["health", "rate-limit", "sdk"]
+model  = "haiku"
+prompt = "Update README.md: document /health, the login rate limit, and sdk.healthCheck()."
