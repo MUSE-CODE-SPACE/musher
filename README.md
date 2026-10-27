@@ -25,6 +25,7 @@ Running several coding agents at once tends to break in the same few ways:
 |---|---|
 | Two agents edit the same checkout and clobber each other | One **git worktree + branch per task**, created and cleaned up for you |
 | "B needs A's code first" | `after = ["a"]`: B starts **from A's branch, stacked**, with A's summary in its prompt |
+| Parallel branches conflict when they come together | The task that stacks them **asks its agent to resolve the conflict**. Musher refuses leftover markers, then runs the check. `musher merge --resolve` does the same for a whole run |
 | The agent says "done" but the tests are red | `check = "npm test"` is a **gate**. On failure the output goes back into the *same* agent session, which tries again |
 | Squinting at panes to guess who is blocked | State comes from the agent's **structured event stream** (Claude `stream-json`, Codex `--json`), not from screen scraping |
 | Context lost between agents | **Shared team notes** (`musher mem`) plus **upstream handoff** summaries go into every prompt |
@@ -102,7 +103,8 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
             │                                         │
             │       fixing ◀── check output ◀────────┘  (up to `retries`)
             │         └─ same agent session (--resume), so it remembers what it tried
-            └─ worktree from base commit, dependency branches merged in, `setup` run
+            └─ worktree from base commit, dependency branches merged in
+               (a conflict goes to the agent first: "keep both sides"), then `setup`
 ```
 
 * **failed**: the agent errored, timed out, or the check still failed after all retries.
@@ -123,7 +125,8 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 | `musher diff <task> [--stat] [--all]` | the task's own changes (`--all` includes stacked dependencies) |
 | `musher ask <task> "<msg>"` | follow up in the same agent session, then re-check |
 | `musher attach <task>` | drop into the session **interactively** in its worktree (`claude --resume …`) |
-| `musher merge [task…]` | `--no-ff` merge of finished branches in dependency order; stops on conflict |
+| `musher merge [task…]` | land finished work: merges only the top branches (stacked ones come along), and aborts cleanly on conflict |
+| `musher merge --resolve` | an `integrate` task stacks every finished branch, an agent resolves conflicts, all checks must pass, then that one branch is merged |
 | `musher mem ["note"] [--edit] [--clear]` | shared team notes injected into every prompt |
 | `musher clean [--purge]` | remove worktrees (`--purge` also removes branches and history) |
 | `musher doctor` | check git and installed agents |
@@ -147,11 +150,12 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 |---|---|---|
 | Core idea | Multiplex interactive agent terminals | Run a graph of agent tasks to a verified result |
 | Runtime model | Background server owns the PTYs | No server: a run is a process plus files in `.musher/` |
-| Binary | ~10–11 MB¹ | **~0.7 MB** (measured: 705 KB, macOS arm64) |
+| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (705 KB, measured) |
+| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **2.8 MB RSS** (8 agents, measured) |
 | Idle cost | Server process stays resident | **Nothing runs** between runs |
-| While orchestrating 8 agents | — | **2.8 MB RSS** (measured), 2.4 ms startup |
-| Agent state | Process name + **screen-pattern heuristics**; `unknown` when unsure² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
-| Isolation between agents | None; agents share a checkout² | **Worktree + branch per task**, automatic |
+| Agent state | Process name + **screen-pattern manifests**; new prompts "may initially show as `idle` instead of `blocked`"² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
+| Isolation between agents | Worktree workspaces **on request** (`herdr worktree create`); by default panes share one checkout | **Worktree + branch per task**, automatic, stacked by dependency |
+| Conflicts between parallel work | Up to you | **Resolved by an agent** while stacking, verified by checks |
 | Dependencies / task graph | Not provided² | `after = [...]` DAG, parallel waves, **branch stacking**, failure propagation |
 | Verification | Not provided | `check` gate with **automatic fix loop** in the same session |
 | Shared context | Through files/git only² | Team notes plus upstream summaries injected into prompts |
@@ -163,13 +167,13 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 | Remote thin client, plugin marketplace | **Yes** | No (it's a CLI; run it over SSH) |
 | Config | `config.toml` (keys, UI, sounds) | `musher.toml` (tasks), strict validation |
 
-¹ Third-party review ([bitdoze](https://www.bitdoze.com/herdr-agent-multiplexer/)). ² Limitations listed in Herdr's docs and the [Developers Digest deep dive](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer). Herdr figures are from public sources as of Oct 2026. Musher figures were measured on an Apple Silicon Mac.
+² From Herdr's own v0.9.5 docs ([agents](https://herdr.dev/docs/agents), [session state](https://herdr.dev/docs/session-state), [CLI reference](https://herdr.dev/docs/cli-reference)) and the [Developers Digest deep dive](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer). All sizes and memory figures were measured side by side on one Apple Silicon Mac (Oct 2026). Herdr ran from its official release binary.
 
 **Use Herdr** when you want to sit with five live agent UIs side by side and steer them by hand. **Use musher** when you want to hand over a list of tasks, walk away, and come back to tested, isolated branches. You can also use both: run `musher watch` in a Herdr pane.
 
 ## Design notes
 
-* **Small on purpose.** About 2.7k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
+* **Small on purpose.** About 3k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
 * **Files are the API.** `.musher/runs/<id>/state.json` is rewritten atomically, `events.jsonl` is append-only, and `logs/` and `out/` hold plain text. Anything can read them.
 * **Safe defaults.** The default permission mode is `acceptEdits`. Agents never push. `.musher/` is hidden through `.git/info/exclude`, so your `.gitignore` is never touched. Ctrl-C terminates whole agent process groups, so no orphan processes are left behind.
 * **Platforms:** macOS and Linux. Windows is untested (WSL should work).

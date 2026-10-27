@@ -39,6 +39,7 @@ USAGE
   musher ask <task> \"<message>\"     follow up in the task's agent session, then re-check
   musher attach <task>              open the task's session interactively in its worktree
   musher merge [task...]            merge finished task branches into your current branch
+  musher merge --resolve            let an agent integrate all finished tasks (conflicts too), verify, then merge
   musher mem [note...]              show or append shared team notes (injected into prompts)
   musher clean [--purge]            remove worktrees of finished runs (--purge: branches + history)
   musher doctor                     check git and installed agents
@@ -808,6 +809,9 @@ fn cmd_ask(args: &Args) -> i32 {
 fn cmd_merge(args: &Args) -> i32 {
     let e = env();
     let dir = find_run(&e, args);
+    if args.has("--resolve") {
+        return merge_resolve(&e, args, &dir);
+    }
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
     if st.isolation != "worktree" {
         die("this run edited the repo directly — nothing to merge");
@@ -835,6 +839,7 @@ fn cmd_merge(args: &Args) -> i32 {
         }
     }
     let mut merged = 0;
+    let mut candidates: Vec<&TaskState> = Vec::new();
     for t in order {
         if !wanted.is_empty() && !wanted.contains(&t.id.as_str()) {
             continue;
@@ -849,6 +854,18 @@ fn cmd_merge(args: &Args) -> i32 {
             eprintln!("skip {}: branch {} is gone", t.id, t.branch);
             continue;
         }
+        candidates.push(t);
+    }
+    // A branch stacked into a later task's branch arrives with it, conflicts already resolved there.
+    let contained = |t: &TaskState| {
+        candidates.iter().find(|u| u.id != t.id && git::git(&e.root, &["merge-base", "--is-ancestor", &t.branch, &u.branch]).is_ok()).map(|u| u.id.clone())
+    };
+    let mut via: Vec<(String, String)> = Vec::new();
+    for t in candidates.clone() {
+        if let Some(u) = contained(t) {
+            via.push((t.id.clone(), u));
+            continue;
+        }
         let ahead = git::git(&e.root, &["rev-list", "--count", &format!("HEAD..{}", t.branch)]).unwrap_or_default();
         if ahead.trim() == "0" {
             println!("= {} already merged", t.id);
@@ -857,11 +874,25 @@ fn cmd_merge(args: &Args) -> i32 {
         let msg = format!("Merge musher task {} (run {})", t.id, st.id);
         match git::git(&e.root, &["merge", "--no-ff", "-m", &msg, &t.branch]) {
             Ok(_) => {
-                println!("✓ merged {} ({} files)", t.id, t.files_changed);
+                let carried: Vec<&str> = via
+                    .iter()
+                    .map(|(x, _)| x.as_str())
+                    .filter(|x| candidates.iter().any(|c| c.id == *x && git::git(&e.root, &["merge-base", "--is-ancestor", &c.branch, &t.branch]).is_ok()))
+                    .collect();
+                let with = if carried.is_empty() { String::new() } else { format!(" (includes {})", carried.join(", ")) };
+                println!("✓ merged {}{with}", t.id);
                 merged += 1;
             }
             Err(err) => {
-                eprintln!("✗ conflict merging {}:\n{err}\nresolve it, commit, then run `musher merge` again (or `git merge --abort`)", t.id);
+                let files = git::git(&e.root, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default().replace('\n', ", ");
+                let _ = git::git(&e.root, &["merge", "--abort"]);
+                eprintln!(
+                    "✗ {} conflicts with what is already merged{}",
+                    t.id,
+                    if files.is_empty() { format!(": {}", agent::clip(&err, 120)) } else { format!(" ({files})") }
+                );
+                eprintln!("  your branch is clean again (merge aborted).");
+                eprintln!("  `musher merge --resolve` lets an agent integrate all finished tasks on a branch, verified by their checks, then merges that.");
                 return 1;
             }
         }
@@ -870,6 +901,102 @@ fn cmd_merge(args: &Args) -> i32 {
         println!("nothing to merge");
     }
     0
+}
+
+/// Add an `integrate` task that stacks every finished branch (agents resolve conflicts),
+/// verify it with the union of the tasks' checks, then merge just that branch.
+fn merge_resolve(e: &Env, args: &Args, dir: &Path) -> i32 {
+    let st = load_state(dir).unwrap_or_else(|err| die(&err));
+    if st.isolation != "worktree" {
+        die("this run edited the repo directly — nothing to merge");
+    }
+    if !st.finished && pid_alive(st.pid) {
+        die("run is still in progress");
+    }
+    if git::is_dirty(&e.root) {
+        die("your working tree has uncommitted changes — commit or stash them first");
+    }
+    let mut plan = load_run_plan(dir);
+    let done: Vec<String> = st.tasks.iter().filter(|t| t.status == Status::Done && !t.id.starts_with("integrate")).map(|t| t.id.clone()).collect();
+    if done.is_empty() {
+        die("no finished tasks to integrate");
+    }
+    let mut id = "integrate".to_string();
+    let mut n = 2;
+    while st.task(&id).is_some() {
+        id = format!("integrate-{n}");
+        n += 1;
+    }
+    let mut checks: Vec<String> = Vec::new();
+    for t in plan.tasks.iter().filter(|t| done.contains(&t.id)) {
+        if let Some(c) = &t.check {
+            if !checks.contains(c) {
+                checks.push(c.clone());
+            }
+        }
+    }
+    let check = (!checks.is_empty()).then(|| checks.join(" && "));
+    plan.tasks.push(Task {
+        id: id.clone(),
+        prompt: format!(
+            "Integrate the finished work of tasks {}. Their branches are merged into yours (any conflicts were resolved while stacking). \
+             Make sure everything works together: every task's behaviour must survive. Fix integration problems only; add nothing new.",
+            done.join(", ")
+        ),
+        agent: None,
+        after: done.clone(),
+        check,
+        retries: None,
+        timeout: None,
+        permission: None,
+        model: None,
+        allow: vec![],
+    });
+    apply_overrides(&mut plan, args);
+    plan.validate().unwrap_or_else(|err| die(&err));
+    fs::write(dir.join("plan.json"), serde_json::to_vec_pretty(&plan).unwrap()).ok();
+    let run = Arc::new(Run::open(dir.to_path_buf()).unwrap_or_else(|err| die(&err)));
+    run.update(|s| {
+        s.finished = false;
+        s.ended = 0;
+        s.tasks.push(TaskState {
+            id: id.clone(),
+            agent: plan.settings.agent.clone(),
+            status: Status::Queued,
+            after: done.clone(),
+            branch: String::new(),
+            worktree: String::new(),
+            start: String::new(),
+            session: String::new(),
+            attempts: 0,
+            started: 0,
+            ended: 0,
+            cost_usd: 0.0,
+            tokens: 0,
+            activity: String::new(),
+            note: String::new(),
+            check: None,
+            files_changed: 0,
+        });
+    });
+    run.event(&id, "integrate", &done.join(", "));
+    if drive(e, plan, run.clone(), args) != 0 {
+        eprintln!("integration did not pass — see `musher logs {id}`; nothing was merged");
+        return 1;
+    }
+    let t = run.snapshot().task(&id).cloned().unwrap();
+    let msg = format!("Merge musher tasks {} (run {}, integrated)", done.join(", "), st.id);
+    match git::git(&e.root, &["merge", "--no-ff", "-m", &msg, &t.branch]) {
+        Ok(_) => {
+            println!("✓ merged {} via {id}", done.join(", "));
+            0
+        }
+        Err(err) => {
+            let _ = git::git(&e.root, &["merge", "--abort"]);
+            eprintln!("✗ your branch moved since the run started and conflicts with {id}: {}", agent::clip(&err, 160));
+            1
+        }
+    }
 }
 
 fn cmd_mem(args: &Args) -> i32 {

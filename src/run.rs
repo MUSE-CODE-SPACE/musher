@@ -145,16 +145,6 @@ pub fn run_task(ctx: &Ctx, id: &str, followup: Option<&str>) {
     let (_, spec) = agent_spec(ctx, &task);
     let mut log = Log::open(&run.log_path(id));
 
-    let cwd = match prepare_workdir(ctx, &task, &mut log) {
-        Ok(p) => p,
-        Err(e) => {
-            log.line(&format!("!! {e}"));
-            run.set_status(id, Status::Failed, &agent::clip(&e, 120));
-            return;
-        }
-    };
-    let cwd_s = cwd.to_string_lossy().to_string();
-    let base = run.snapshot().task(id).map(|t| t.start.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| run.snapshot().base_commit);
     let timeout = Duration::from_secs(parse_duration(task.timeout.as_deref().unwrap_or(&ctx.plan.settings.timeout)).unwrap_or(1800));
     let retries = task.retries.unwrap_or(ctx.plan.settings.retries);
     let permission = task.permission.clone().unwrap_or_else(|| ctx.plan.settings.permission.clone());
@@ -164,6 +154,31 @@ pub fn run_task(ctx: &Ctx, id: &str, followup: Option<&str>) {
         allow.push(format!("Bash({c})"));
     }
     let allow = allow.join(",");
+    let inv = Invoke { permission: permission.clone(), model: model.clone(), allow: allow.clone(), timeout };
+
+    let prepared = prepare_workdir(ctx, &task, &mut log).and_then(|(cwd, fresh)| {
+        if fresh {
+            if let Err(e) = stack_deps(ctx, &task, spec, &cwd, &inv, &mut log) {
+                // Drop the half-stacked worktree so a resume starts this task cleanly.
+                let _g = git::LOCK.lock().unwrap();
+                let _ = git::git(&ctx.root, &["worktree", "remove", "--force", &cwd.to_string_lossy()]);
+                let branch = run.snapshot().task(id).map(|t| t.branch.clone()).unwrap_or_default();
+                let _ = git::git(&ctx.root, &["branch", "-D", &branch]);
+                return Err(e);
+            }
+        }
+        Ok(cwd)
+    });
+    let cwd = match prepared {
+        Ok(p) => p,
+        Err(e) => {
+            log.line(&format!("!! {e}"));
+            run.set_status(id, Status::Failed, &agent::clip(&e, 120));
+            return;
+        }
+    };
+    let cwd_s = cwd.to_string_lossy().to_string();
+    let base = run.snapshot().task(id).map(|t| t.start.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| run.snapshot().base_commit);
 
     run.task(id, |t| {
         if t.started == 0 {
@@ -283,10 +298,11 @@ fn new_session(spec: &AgentSpec) -> String {
     }
 }
 
-fn prepare_workdir(ctx: &Ctx, task: &Task, log: &mut Log) -> Result<PathBuf, String> {
+/// Returns the working directory and whether it was freshly created (and so needs stacking).
+fn prepare_workdir(ctx: &Ctx, task: &Task, log: &mut Log) -> Result<(PathBuf, bool), String> {
     let snap = ctx.run.snapshot();
     if snap.isolation == "none" {
-        return Ok(ctx.root.clone());
+        return Ok((ctx.root.clone(), false));
     }
     let rid = &snap.id;
     let path = ctx.home.join("wt").join(rid).join(&task.id);
@@ -297,7 +313,7 @@ fn prepare_workdir(ctx: &Ctx, task: &Task, log: &mut Log) -> Result<PathBuf, Str
     });
     if path.join(".git").exists() {
         log.line(&format!("== reusing worktree {}", path.display()));
-        return Ok(path);
+        return Ok((path, false));
     }
     {
         let _g = git::LOCK.lock().unwrap();
@@ -309,28 +325,85 @@ fn prepare_workdir(ctx: &Ctx, task: &Task, log: &mut Log) -> Result<PathBuf, Str
             git::git(&ctx.root, &["worktree", "add", "-q", "-b", &branch, &p, &snap.base_commit])?;
         }
         log.line(&format!("== worktree {} on {branch}", path.display()));
-        // Stack dependency branches so this task builds on their work.
-        for dep in &task.after {
-            let dep_branch = format!("musher/{rid}/{dep}");
-            if let Err(e) =
-                git::git(&path, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "merge", "--no-ff", "--no-edit", "-q", &dep_branch])
-            {
-                let _ = git::git(&path, &["merge", "--abort"]);
-                return Err(format!("merge conflict stacking {dep}: {}", agent::clip(&e, 160)));
-            }
-            log.line(&format!("== merged {dep_branch}"));
-        }
-        let start = git::head(&path)?;
-        ctx.run.task(&task.id, |t| t.start = start);
     }
+    Ok((path, true))
+}
+
+/// Agent invocation settings shared by the main attempts and conflict resolution.
+struct Invoke {
+    permission: String,
+    model: String,
+    allow: String,
+    timeout: Duration,
+}
+
+/// Merge dependency branches into a fresh worktree so the task builds on their work.
+/// Branches developed in parallel can conflict; the task's own agent resolves that,
+/// and musher refuses to continue while conflict markers remain.
+fn stack_deps(ctx: &Ctx, task: &Task, spec: &AgentSpec, cwd: &Path, inv: &Invoke, log: &mut Log) -> Result<(), String> {
+    let rid = ctx.run.id();
+    let id = task.id.as_str();
+    for dep in &task.after {
+        let dep_branch = format!("musher/{rid}/{dep}");
+        let merged = git::git(cwd, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "merge", "--no-ff", "--no-edit", "-q", &dep_branch]);
+        if merged.is_ok() {
+            log.line(&format!("== merged {dep_branch}"));
+            continue;
+        }
+        let conflicted = git::git(cwd, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+        let files: Vec<&str> = conflicted.lines().filter(|l| !l.is_empty()).collect();
+        if files.is_empty() || spec.raw {
+            let _ = git::git(cwd, &["merge", "--abort"]);
+            return Err(format!("merge conflict stacking {dep}: {}", agent::clip(&merged.unwrap_err(), 140)));
+        }
+        let list = files.join(", ");
+        log.section(&format!("conflict merging {dep} — {list}"));
+        ctx.run.event(id, "conflict", &format!("{dep}: {list}"));
+        ctx.run.set_status(id, Status::Fixing, &format!("resolving conflict with {dep}"));
+        let mut prompt = format!(
+            "You are integrating upstream work before starting your own task.\n\
+             Merging branch `{dep_branch}` (task `{dep}`, developed in parallel with the work already on this branch) \
+             produced conflicts in: {list}.\n\
+             Resolve every conflict so that BOTH sides keep working: combine the changes, do not drop either one. \
+             Remove all conflict markers. Do not start any other work and do not commit — musher commits the merge.\n"
+        );
+        if let Some(c) = &task.check {
+            prompt.push_str(&format!("You may verify with `{c}`.\n"));
+        }
+        let argv = agent::build_argv(
+            &spec.cmd,
+            &Vars {
+                prompt: &prompt,
+                session: &new_session(spec),
+                cwd: &cwd.to_string_lossy(),
+                permission: &inv.permission,
+                model: &inv.model,
+                allow: &inv.allow,
+            },
+        );
+        log.line(&format!("[prompt]\n{}\n[/prompt]", prompt.trim_end()));
+        let out = run_agent(ctx, id, &argv, cwd, inv.timeout, "", log);
+        let markers = git::git(cwd, &["grep", "-n", "-I", "-E", "^(<<<<<<<|>>>>>>>)( |$)", "--", "."]).unwrap_or_default();
+        if !out.ok || !markers.trim().is_empty() {
+            let _ = git::git(cwd, &["merge", "--abort"]);
+            let why = if out.ok { "conflict markers remain".to_string() } else { out.error };
+            return Err(format!("could not resolve conflict with {dep}: {}", agent::clip(&why, 120)));
+        }
+        git::git(cwd, &["add", "-A"])?;
+        git::git(cwd, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "commit", "--no-verify", "-q", "--no-edit"])?;
+        log.line(&format!("== resolved and merged {dep_branch}"));
+        ctx.run.event(id, "resolved", dep);
+    }
+    let start = git::head(cwd)?;
+    ctx.run.task(id, |t| t.start = start);
     if let Some(setup) = &ctx.plan.settings.setup {
         log.section(&format!("setup — {setup}"));
-        let (ok, code, _) = run_check(&task.id, setup, &path, Duration::from_secs(1800), log);
+        let (ok, code, _) = run_check(id, setup, cwd, Duration::from_secs(1800), log);
         if !ok {
             return Err(format!("setup `{setup}` failed (exit {code})"));
         }
     }
-    Ok(path)
+    Ok(())
 }
 
 fn build_prompt(ctx: &Ctx, task: &Task) -> String {

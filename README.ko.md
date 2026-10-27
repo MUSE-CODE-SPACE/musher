@@ -25,6 +25,7 @@ musher run 261027-1102  3/5 done  2 active  $0.41  04:12
 |---|---|
 | 두 에이전트가 같은 폴더를 고치다 서로 덮어씀 | 태스크마다 **git worktree + 브랜치**를 자동으로 생성하고 정리 |
 | "B는 A 코드가 있어야 하는데…" | `after = ["a"]`로 지정하면 B는 **A의 브랜치 위에서 시작**하고, A의 결과 요약을 프롬프트로 전달받음 |
+| 병렬 브랜치를 합치면 충돌 | 브랜치를 쌓는 태스크의 **에이전트가 충돌을 직접 해결**. 충돌 표식이 남아 있으면 진행하지 않고, 해결 후 check로 검증. `musher merge --resolve`는 런 전체에 같은 방식 적용 |
 | 에이전트는 "완료"라는데 테스트는 빨간불 | `check = "npm test"`가 **관문** 역할. 실패 출력을 **같은 세션**에 되돌려 재시도 |
 | 누가 막혔는지 화면을 보고 추측 | 화면 스크래핑이 아니라 에이전트의 **구조화 이벤트 스트림**(Claude `stream-json`, Codex `--json`)으로 판정 |
 | 에이전트 간 맥락 단절 | **팀 공유 메모**(`musher mem`)와 **상류 결과 인계**를 모든 프롬프트에 주입 |
@@ -98,7 +99,8 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
             │                                            │
             │       fixing ◀── 검증 출력 ◀───────────────┘  (최대 retries회)
             │         └─ 같은 에이전트 세션(--resume)이라 이전 시도를 기억함
-            └─ 베이스 커밋에서 worktree 생성 → 의존 브랜치 병합 → setup 실행
+            └─ 베이스 커밋에서 worktree 생성 → 의존 브랜치 병합
+               (충돌이 나면 먼저 에이전트가 "양쪽 다 살리기"로 해결) → setup 실행
 ```
 
 * **failed**: 에이전트 오류, 시간 초과, 또는 재시도를 모두 써도 검증 실패
@@ -119,7 +121,8 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 | `musher diff <task> [--stat] [--all]` | 태스크 고유 변경분 (`--all`은 쌓인 의존 변경분 포함) |
 | `musher ask <task> "<메시지>"` | 같은 세션에 후속 지시 → 재검증 |
 | `musher attach <task>` | 해당 worktree에서 세션에 **대화형으로** 접속 |
-| `musher merge [task…]` | 완료된 브랜치를 의존성 순서로 `--no-ff` 병합, 충돌 시 멈춤 |
+| `musher merge [task…]` | 완료된 작업 반영. 최상위 브랜치만 병합(쌓인 브랜치는 함께 들어옴), 충돌 시 깨끗하게 되돌림 |
+| `musher merge --resolve` | `integrate` 태스크가 모든 완료 브랜치를 쌓고, 에이전트가 충돌을 해결하고, 전체 check를 통과한 뒤에만 병합 |
 | `musher mem ["메모"] [--edit] [--clear]` | 모든 프롬프트에 주입되는 팀 공유 메모 |
 | `musher clean [--purge]` | worktree 정리 (`--purge`는 브랜치와 기록까지 삭제) |
 | `musher doctor` | git과 설치된 에이전트 점검 |
@@ -143,11 +146,12 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 |---|---|---|
 | 핵심 개념 | 대화형 에이전트 터미널 다중화 | 에이전트 태스크 그래프를 검증된 결과까지 실행 |
 | 실행 모델 | 백그라운드 서버가 PTY 소유 | 서버 없음: 런 = 프로세스 + `.musher/` 파일 |
-| 바이너리 | ~10–11 MB¹ | **~0.7 MB** (실측 705 KB, macOS arm64) |
+| 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.7 MB** (705 KB 실측) |
+| 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 2.8 MB** (에이전트 8개, 실측) |
 | 유휴 비용 | 서버 상주 | **아무것도 안 돎** |
-| 에이전트 8개 병렬 오케스트레이션 중 | — | **RSS 2.8 MB** (실측), 기동 2.4 ms |
-| 상태 판정 | 프로세스명 + **화면 패턴 휴리스틱**, 확신 없으면 `unknown`² | 에이전트의 **구조화 이벤트**(세션 id, 도구, 비용, 최종 답, 권한 거부) + 종료 코드 |
-| 에이전트 간 격리 | 없음 (같은 체크아웃 공유)² | 태스크별 **worktree + 브랜치** 자동 |
+| 상태 판정 | 프로세스명 + **화면 패턴 매니페스트**. 새로운 프롬프트는 "처음에 `blocked` 대신 `idle`로 보일 수 있음"² | 에이전트의 **구조화 이벤트**(세션 id, 도구, 비용, 최종 답, 권한 거부) + 종료 코드 |
+| 에이전트 간 격리 | `herdr worktree create`로 **직접 만들면** 가능. 기본은 패널들이 체크아웃 하나를 공유 | 태스크별 **worktree + 브랜치** 자동, 의존성대로 쌓음 |
+| 병렬 작업 간 충돌 | 사용자 몫 | 쌓는 시점에 **에이전트가 해결**, check로 검증 |
 | 의존성/태스크 그래프 | 제공 안 함² | `after` DAG, 병렬 웨이브, **브랜치 스태킹**, 실패 전파 |
 | 검증 | 제공 안 함 | `check` 관문 + 같은 세션에서 **자동 수정 루프** |
 | 공유 맥락 | 파일/git으로만² | 팀 메모 + 상류 요약 프롬프트 주입 |
@@ -158,13 +162,13 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 | 에이전트 화면 실시간 보기, 마우스, 분할 | **예 (Herdr의 강점)** | 멀티플렉서 아님: `logs -f`, `watch`, `attach` |
 | 원격 씬 클라이언트, 플러그인 마켓 | **예** | 없음 (CLI이므로 SSH로 사용) |
 
-¹ 서드파티 리뷰([bitdoze](https://www.bitdoze.com/herdr-agent-multiplexer/)) ² Herdr 문서와 [Developers Digest 심층 분석](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer)에 명시된 한계. Herdr 수치는 2026년 10월 기준 공개 자료이고, musher 수치는 Apple Silicon Mac에서 직접 측정했습니다.
+² Herdr v0.9.5 공식 문서([agents](https://herdr.dev/docs/agents), [session state](https://herdr.dev/docs/session-state), [CLI reference](https://herdr.dev/docs/cli-reference))와 [Developers Digest 심층 분석](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer) 기준. 크기와 메모리 수치는 모두 Apple Silicon Mac 한 대에서 나란히 직접 측정했습니다(2026년 10월). Herdr는 공식 릴리스 바이너리로 실행했습니다.
 
 **Herdr가 맞는 경우**: 에이전트 5개의 화면을 나란히 띄워 놓고 직접 조종하고 싶을 때. **musher가 맞는 경우**: 할 일 목록을 맡기고 자리를 비운 뒤, 돌아와서 테스트를 통과한 격리 브랜치를 받고 싶을 때. 둘을 함께 써도 됩니다. Herdr 패널 하나에서 `musher watch`를 띄우면 됩니다.
 
 ## 설계 원칙
 
-* **일부러 작게.** Rust 약 2.7k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
+* **일부러 작게.** Rust 약 3k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
 * **파일이 곧 API.** `state.json`은 원자적으로 교체되고, `events.jsonl`은 추가만 하며, `logs/`와 `out/`은 평문입니다. 어떤 도구로든 읽을 수 있습니다.
 * **안전한 기본값.** 기본 권한은 `acceptEdits`이고, 에이전트는 절대 push하지 않습니다. `.musher/`는 `.git/info/exclude`로 숨기므로 `.gitignore`를 건드리지 않습니다. Ctrl-C를 누르면 에이전트 프로세스 그룹 전체를 종료하므로 고아 프로세스가 남지 않습니다.
 * **지원 플랫폼:** macOS, Linux. Windows는 미검증입니다(WSL 권장).

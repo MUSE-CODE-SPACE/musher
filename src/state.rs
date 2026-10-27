@@ -183,10 +183,11 @@ impl Run {
 
     pub fn set_status(&self, id: &str, status: Status, note: &str) {
         self.task(id, |t| {
-            t.status = status;
-            if !note.is_empty() || status.is_final() {
+            // A new phase starts with its own note; repeating a phase keeps the old one unless given.
+            if !note.is_empty() || status.is_final() || status != t.status {
                 t.note = note.to_string();
             }
+            t.status = status;
             if status.is_final() {
                 t.ended = now();
                 t.activity.clear();
