@@ -2,7 +2,7 @@
 
 **Drive a team of AI coding agents.** Each agent gets its own git worktree. Tasks run as a dependency graph, and every result is checked by your tests, with failures sent back to the agent until they pass. A durable log records everything. Musher is one ~700 KB binary with no server.
 
-[한국어 README](README.ko.md)
+[한국어 README](README.ko.md) · [Step-by-step beginner manual (Korean)](https://www.resonance-space.net/musher/)
 
 ```
 musher run 261027-1102  3/5 done  2 active  $0.41  04:12

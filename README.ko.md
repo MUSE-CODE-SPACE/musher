@@ -2,7 +2,7 @@
 
 **AI 코딩 에이전트 팀을 몰고 가는 도구.** 에이전트마다 독립된 git worktree를 주고, 태스크는 의존성 그래프(DAG) 순서로 실행합니다. 결과는 매번 여러분의 테스트로 검증하고, 실패하면 통과할 때까지 같은 에이전트에게 되돌려 고치게 합니다. 모든 과정은 영구 로그에 남습니다. 서버 없이 ~700KB 바이너리 하나로 동작합니다.
 
-[English README](README.md)
+[English README](README.md) · **[초보자용 따라 하기 설명서 →](https://www.resonance-space.net/musher/)** (설치부터 첫 실행까지 한 단계씩)
 
 ```
 musher run 261027-1102  3/5 done  2 active  $0.41  04:12
