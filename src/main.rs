@@ -1,6 +1,7 @@
 mod agent;
 mod git;
 mod plan;
+mod report;
 mod run;
 mod state;
 mod ui;
@@ -27,11 +28,14 @@ USAGE
   musher run [-j N] [--only a,b]    run the task graph in musher.toml
   musher do \"<prompt>\" [opts]       one-off task: --agent, --check, --id, --retries
   musher resume [run]               continue a stopped or failed run (done tasks are kept)
+  musher stop [run]                 stop a background run (agents are terminated, work is kept)
+  musher plan \"<goal>\" [--out f]     let an agent split a goal into a musher.toml task graph
 
   musher watch [run]                live dashboard from any terminal
   musher status [run] [--json]      snapshot of a run
   musher wait [run]                 block until a run finishes (exit 0 = all done)
-  musher ls                         list runs
+  musher ls [--json]                list runs
+  musher report [run] [tasks...]    markdown report: status, time, cost, files, each task's summary
   musher logs <task> [-f]           raw agent + check output
   musher events [-f] [--json]       durable event log
 
@@ -40,9 +44,11 @@ USAGE
   musher attach <task>              open the task's session interactively in its worktree
   musher merge [task...]            merge finished task branches into your current branch
   musher merge --resolve            let an agent integrate all finished tasks (conflicts too), verify, then merge
+  musher pr <task...|--all> [--draft] push task branches and open pull requests (needs gh)
   musher mem [note...]              show or append shared team notes (injected into prompts)
   musher clean [--purge]            remove worktrees of finished runs (--purge: branches + history)
   musher doctor                     check git and installed agents
+  musher completions <zsh|bash|fish> shell completion script
 
 COMMON FLAGS
   -f <file>      plan file (default: musher.toml at the repo root)
@@ -57,7 +63,24 @@ struct Args {
     flags: HashMap<String, String>,
 }
 
-const VALUE_FLAGS: &[&str] = &["-f", "-j", "--only", "--run", "--agent", "--check", "--id", "--retries", "--run-id", "--timeout", "--model", "--permission"];
+const VALUE_FLAGS: &[&str] = &[
+    "-f",
+    "-j",
+    "--only",
+    "--run",
+    "--agent",
+    "--check",
+    "--id",
+    "--retries",
+    "--run-id",
+    "--timeout",
+    "--model",
+    "--permission",
+    "--out",
+    "--base",
+    "--remote",
+    "--title",
+];
 
 impl Args {
     fn parse(raw: &[String]) -> Args {
@@ -125,10 +148,16 @@ fn main() {
         "run" => cmd_run(&args, &raw),
         "do" => cmd_do(&args, &raw),
         "resume" => cmd_resume(&args, &raw),
+        "stop" | "kill" => cmd_stop(&args),
+        "plan" => cmd_plan(&args),
+        "report" => cmd_report(&args),
+        "pr" => cmd_pr(&args),
+        "completions" => cmd_completions(&args),
+        "__complete" => cmd_complete(&args),
         "watch" => cmd_watch(&args),
         "status" | "st" => cmd_status(&args),
         "wait" => cmd_wait(&args),
-        "ls" | "runs" => cmd_ls(),
+        "ls" | "runs" => cmd_ls(&args),
         "logs" | "log" => cmd_logs(&args),
         "events" => cmd_events(&args),
         "diff" => cmd_diff(&args),
@@ -573,29 +602,338 @@ fn cmd_wait(args: &Args) -> i32 {
     }
 }
 
-fn cmd_ls() -> i32 {
+fn run_state_word(st: &RunState) -> &'static str {
+    if st.finished {
+        report::run_outcome(st)
+    } else if pid_alive(st.pid) {
+        "running"
+    } else {
+        "interrupted"
+    }
+}
+
+fn cmd_ls(args: &Args) -> i32 {
     let e = env();
     let runs = list_runs(&e.home);
+    if args.has("--json") {
+        let v: Vec<serde_json::Value> = runs
+            .iter()
+            .filter_map(|d| load_state(d).ok())
+            .map(|st| {
+                let done = st.tasks.iter().filter(|t| t.status == Status::Done).count();
+                serde_json::json!({"id": st.id, "state": run_state_word(&st), "done": done, "total": st.tasks.len(), "cost_usd": st.cost(), "started": st.started, "ended": st.ended, "tasks": st.tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()})
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return 0;
+    }
     if runs.is_empty() {
         println!("no runs yet");
     }
     for d in runs {
         if let Ok(st) = load_state(&d) {
             let done = st.tasks.iter().filter(|t| t.status == Status::Done).count();
-            let state = if st.finished {
-                if done == st.tasks.len() {
-                    "done"
-                } else {
-                    "incomplete"
-                }
-            } else if pid_alive(st.pid) {
-                "running"
-            } else {
-                "interrupted"
-            };
             let names: Vec<&str> = st.tasks.iter().map(|t| t.id.as_str()).collect();
-            println!("{}  {:<11} {}/{}  ${:.2}  {}", st.id, state, done, st.tasks.len(), st.cost(), agent::clip(&names.join(", "), 60));
+            println!("{}  {:<11} {}/{}  ${:.2}  {}", st.id, run_state_word(&st), done, st.tasks.len(), st.cost(), agent::clip(&names.join(", "), 60));
         }
+    }
+    0
+}
+
+fn cmd_stop(args: &Args) -> i32 {
+    let e = env();
+    let dir = match args.pos.first() {
+        Some(id) => e.home.join("runs").join(id),
+        None => find_run(&e, args),
+    };
+    let st = load_state(&dir).unwrap_or_else(|err| die(&err));
+    if st.finished || !pid_alive(st.pid) {
+        println!("run {} is not running", st.id);
+        return 0;
+    }
+    unsafe {
+        libc::kill(st.pid as i32, libc::SIGTERM);
+    }
+    print!("stopping run {} (pid {}) ", st.id, st.pid);
+    for _ in 0..60 {
+        if let Ok(now) = load_state(&dir) {
+            if now.finished || !pid_alive(now.pid) {
+                println!("— stopped. Finished tasks are kept; `musher resume` continues the rest.");
+                return 0;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    println!("— still shutting down; check `musher status`");
+    1
+}
+
+fn cmd_report(args: &Args) -> i32 {
+    let e = env();
+    let dir = match args.pos.first().filter(|p| e.home.join("runs").join(p).join("state.json").exists()) {
+        Some(id) => e.home.join("runs").join(id),
+        None => find_run(&e, args),
+    };
+    let st = load_state(&dir).unwrap_or_else(|err| die(&err));
+    let only: Vec<&str> = args.pos.iter().map(String::as_str).filter(|p| st.task(p).is_some()).collect();
+    print!("{}", report::markdown(&dir, &st, &only));
+    0
+}
+
+/// Push finished task branches and open a pull request for each, body = that task's report.
+fn cmd_pr(args: &Args) -> i32 {
+    let e = env();
+    let dir = find_run(&e, args);
+    let st = load_state(&dir).unwrap_or_else(|err| die(&err));
+    if st.isolation != "worktree" {
+        die("this run edited the repo directly — no task branches to open PRs from");
+    }
+    if Command::new("gh").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        die("`gh` (GitHub CLI) is required: https://cli.github.com");
+    }
+    let ids: Vec<&str> = if args.has("--all") {
+        st.tasks.iter().filter(|t| t.status == Status::Done).map(|t| t.id.as_str()).collect()
+    } else {
+        args.pos.iter().map(String::as_str).collect()
+    };
+    if ids.is_empty() {
+        die("usage: musher pr <task...> | --all  [--draft] [--base main] [--remote origin]");
+    }
+    let remote = args.get("--remote").unwrap_or("origin");
+    let base = args.get("--base").map(String::from).unwrap_or_else(|| st.base_ref.clone());
+    let mut code = 0;
+    for id in ids {
+        let Some(t) = st.task(id) else {
+            eprintln!("skip {id}: not in run {}", st.id);
+            code = 1;
+            continue;
+        };
+        if t.status != Status::Done {
+            eprintln!("skip {id}: {}{}", t.status.as_str(), if t.note.is_empty() { String::new() } else { format!(" — {}", t.note) });
+            code = 1;
+            continue;
+        }
+        if !git::branch_exists(&e.root, &t.branch) {
+            eprintln!("skip {id}: branch {} is gone", t.branch);
+            code = 1;
+            continue;
+        }
+        if let Err(err) = git::git(&e.root, &["push", "-u", remote, &format!("{}:{}", t.branch, t.branch)]) {
+            eprintln!("✗ {id}: {}", agent::clip(&err, 200));
+            code = 1;
+            continue;
+        }
+        let summary = fs::read_to_string(dir.join("out").join(format!("{id}.md"))).unwrap_or_default();
+        let title = args.get("--title").map(String::from).unwrap_or_else(|| {
+            let first = summary.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim_start_matches('#').trim()).unwrap_or("");
+            if first.is_empty() || first.len() > 72 {
+                format!("musher: {id}")
+            } else {
+                format!("{id}: {first}")
+            }
+        });
+        let stat = git::git(&e.root, &["diff", "--stat", &format!("{}..{}", if t.start.is_empty() { &st.base_commit } else { &t.start }, t.branch)])
+            .unwrap_or_default();
+        let mut body = report::markdown(&dir, &st, &[id]);
+        if !stat.trim().is_empty() {
+            body.push_str(&format!("\n<details><summary>diff --stat</summary>\n\n```\n{}\n```\n</details>\n", stat.trim_end()));
+        }
+        body.push_str(&format!("\n---\nOpened by [musher](https://github.com/MUSE-CODE-SPACE/musher) run `{}`.\n", st.id));
+        let body_path = dir.join(format!("pr-{id}.md"));
+        fs::write(&body_path, &body).unwrap_or_else(|err| die(&err.to_string()));
+        let mut c = Command::new("gh");
+        c.arg("pr")
+            .arg("create")
+            .arg("--head")
+            .arg(&t.branch)
+            .arg("--base")
+            .arg(&base)
+            .arg("--title")
+            .arg(&title)
+            .arg("--body-file")
+            .arg(&body_path)
+            .current_dir(&e.root);
+        if args.has("--draft") {
+            c.arg("--draft");
+        }
+        match c.output() {
+            Ok(o) if o.status.success() => println!("✓ {id}: {}", String::from_utf8_lossy(&o.stdout).trim()),
+            Ok(o) => {
+                eprintln!("✗ {id}: {}", String::from_utf8_lossy(&o.stderr).trim());
+                code = 1;
+            }
+            Err(err) => die(&format!("cannot run gh: {err}")),
+        }
+    }
+    code
+}
+
+/// Ask the configured agent to turn a goal into a task graph, validate it, write musher.toml.
+fn cmd_plan(args: &Args) -> i32 {
+    let e = env();
+    let goal = args.pos.join(" ");
+    if goal.trim().is_empty() {
+        die("usage: musher plan \"<goal>\" [--agent claude] [--out musher.toml] [--force]");
+    }
+    let plan = load_plan(&e, args);
+    let out = args.get("--out").map(PathBuf::from).unwrap_or_else(|| e.root.join("musher.toml"));
+    let existing_tasks = Plan::load(&out).map(|p| !p.tasks.is_empty()).unwrap_or(false);
+    if existing_tasks && !args.has("--force") && !args.has("--print") {
+        die(&format!("{} already has tasks — pass --force to replace them, --print to only show the proposal, or --out <file>", out.display()));
+    }
+    let name = args.get("--agent").map(String::from).unwrap_or_else(|| plan.settings.agent.clone());
+    let spec = plan.agents.get(&name).unwrap_or_else(|| die(&format!("unknown agent {name:?}")));
+    let prompt = format!(
+        "Look at this repository, then split the goal below into musher tasks.\n\n\
+         Rules:\n\
+         - Output ONLY a TOML document with one or more [[task]] entries (no [settings], no prose, no code fence).\n\
+         - Each task: id (short, [a-z0-9-]), prompt (precise instructions a coding agent can finish alone; name files and behaviour), \
+         check (a shell command that exits 0 only when the task is correctly done, e.g. the project's test command; omit it only if nothing is testable), \
+         after (ids this task must build on; leave out when independent).\n\
+         - Prefer independent tasks that can run in parallel in separate git worktrees; use after only for a real code dependency.\n\
+         - 2 to 6 tasks. Do not modify any file.\n\n\
+         Goal: {goal}\n"
+    );
+    let argv = agent::build_argv(
+        &spec.cmd,
+        &agent::Vars {
+            prompt: &prompt,
+            session: &state::uuid_v4(),
+            cwd: &e.root.to_string_lossy(),
+            permission: "plan",
+            model: args.get("--model").unwrap_or(&spec.model),
+            allow: "",
+        },
+    );
+    eprintln!("musher: asking {name} to plan…");
+    let o = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(&e.root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap_or_else(|err| die(&format!("cannot start {}: {err}", argv[0])));
+    let text = String::from_utf8_lossy(&o.stdout);
+    let (mut result, mut last) = (String::new(), String::new());
+    for line in text.lines() {
+        let s = agent::parse_line(line);
+        if let Some(r) = s.result {
+            result = r;
+        }
+        if let Some(t) = s.text {
+            last = t;
+        }
+    }
+    if result.is_empty() {
+        result = if spec.raw { text.to_string() } else { last };
+    }
+    let toml = extract_toml(&result);
+    if toml.trim().is_empty() {
+        die(&format!("the agent returned no plan (exit {}): {}", o.status.code().unwrap_or(-1), agent::clip(&String::from_utf8_lossy(&o.stderr), 200)));
+    }
+    let proposed = Plan::parse(&toml).unwrap_or_else(|err| die(&format!("the agent's plan is invalid: {err}\n\n{toml}")));
+    if args.has("--print") {
+        print!("{toml}");
+        return 0;
+    }
+    // Keep the user's [settings]/[agents]; replace the tasks.
+    let head = fs::read_to_string(&out).ok().map(|cur| cur.split("[[task]]").next().unwrap_or("").trim_end().to_string()).filter(|h| !h.is_empty());
+    let mut file = match head {
+        Some(h) => format!("{h}\n\n"),
+        None => format!("# musher.toml — generated by `musher plan`\n[settings]\nparallel = {}\nagent = \"{name}\"\n\n", plan.settings.parallel),
+    };
+    file.push_str(&format!("# goal: {}\n", agent::clip(&goal, 200)));
+    file.push_str(toml.trim_start());
+    if !file.ends_with('\n') {
+        file.push('\n');
+    }
+    Plan::parse(&file).unwrap_or_else(|err| die(&format!("internal: generated file is invalid: {err}")));
+    fs::write(&out, &file).unwrap_or_else(|err| die(&err.to_string()));
+    println!("wrote {} ({} tasks)\n", out.display(), proposed.tasks.len());
+    dry_run(&proposed);
+    println!("\nedit as you like, then `musher run`");
+    0
+}
+
+/// The TOML part of an agent answer: a ```toml fence if there is one, else from the first [[task]].
+fn extract_toml(s: &str) -> String {
+    if let Some(i) = s.find("```") {
+        let rest = &s[i + 3..];
+        let rest = rest.split_once('\n').map(|(_, r)| r).unwrap_or(rest);
+        if let Some(j) = rest.find("```") {
+            return rest[..j].to_string();
+        }
+    }
+    match s.find("[[task]]") {
+        Some(i) => s[i..].to_string(),
+        None => String::new(),
+    }
+}
+
+fn cmd_completions(args: &Args) -> i32 {
+    const CMDS: &str =
+        "init run do resume stop plan watch status wait ls report logs events diff ask attach merge pr mem clean doctor completions help version";
+    const TASK_CMDS: &str = "logs diff ask attach pr";
+    const RUN_CMDS: &str = "resume stop watch wait report";
+    match args.pos.first().map(String::as_str) {
+        Some("zsh") => print!(
+            r##"#compdef musher
+_musher() {{
+  local -a cmds; cmds=({CMDS})
+  if (( CURRENT == 2 )); then _describe 'command' cmds; return; fi
+  case $words[2] in
+    {t}) _values 'task' $(musher __complete tasks 2>/dev/null) ;;
+    {r}) _values 'run' $(musher __complete runs 2>/dev/null) ;;
+    completions) _values 'shell' zsh bash fish ;;
+    *) _files ;;
+  esac
+}}
+compdef _musher musher
+"##,
+            t = TASK_CMDS.replace(' ', "|"),
+            r = RUN_CMDS.replace(' ', "|")
+        ),
+        Some("bash") => print!(
+            r##"_musher() {{
+  local cur=${{COMP_WORDS[COMP_CWORD]}}
+  if [ $COMP_CWORD -eq 1 ]; then COMPREPLY=($(compgen -W "{CMDS}" -- "$cur")); return; fi
+  case ${{COMP_WORDS[1]}} in
+    {t}) COMPREPLY=($(compgen -W "$(musher __complete tasks 2>/dev/null)" -- "$cur")) ;;
+    {r}) COMPREPLY=($(compgen -W "$(musher __complete runs 2>/dev/null)" -- "$cur")) ;;
+    completions) COMPREPLY=($(compgen -W "zsh bash fish" -- "$cur")) ;;
+  esac
+}}
+complete -F _musher musher
+"##,
+            t = TASK_CMDS.replace(' ', "|"),
+            r = RUN_CMDS.replace(' ', "|")
+        ),
+        Some("fish") => {
+            println!("complete -c musher -f");
+            for c in CMDS.split(' ') {
+                println!("complete -c musher -n '__fish_use_subcommand' -a {c}");
+            }
+            println!("complete -c musher -n '__fish_seen_subcommand_from {TASK_CMDS}' -a '(musher __complete tasks 2>/dev/null)'");
+            println!("complete -c musher -n '__fish_seen_subcommand_from {RUN_CMDS}' -a '(musher __complete runs 2>/dev/null)'");
+            println!("complete -c musher -n '__fish_seen_subcommand_from completions' -a 'zsh bash fish'");
+        }
+        _ => die("usage: musher completions <zsh|bash|fish>   e.g. musher completions zsh > ~/.zfunc/_musher"),
+    }
+    0
+}
+
+/// Names for shell completion: task ids of the latest run, or run ids.
+fn cmd_complete(args: &Args) -> i32 {
+    let e = env();
+    match args.pos.first().map(String::as_str) {
+        Some("runs") => list_runs(&e.home).iter().filter_map(|d| d.file_name().map(|n| n.to_string_lossy().to_string())).for_each(|n| println!("{n}")),
+        Some("tasks") => {
+            if let Some(d) = list_runs(&e.home).first() {
+                if let Ok(st) = load_state(d) {
+                    st.tasks.iter().for_each(|t| println!("{}", t.id));
+                }
+            }
+        }
+        _ => {}
     }
     0
 }
@@ -1086,9 +1424,10 @@ fn cmd_doctor() -> i32 {
         println!("{} commits    {}", ok(git::head(&e.root).is_ok()), if git::head(&e.root).is_ok() { "HEAD found" } else { "no commits yet" });
     }
     println!("{} musher.toml{}", ok(e.root.join("musher.toml").exists()), if e.root.join("musher.toml").exists() { "" } else { " missing (`musher init`)" });
-    for (bin, flag) in [("claude", "--version"), ("codex", "--version"), ("gemini", "--version")] {
+    for (bin, flag) in [("claude", "--version"), ("codex", "--version"), ("gemini", "--version"), ("gh", "--version")] {
         let v = ver(bin, flag);
-        println!("{} {:<10} {}", if v.is_some() { "✓" } else { "·" }, bin, v.unwrap_or_else(|| "not installed".into()));
+        let miss = if bin == "gh" { "not installed (optional, for `musher pr`)" } else { "not installed" };
+        println!("{} {:<10} {}", if v.is_some() { "✓" } else { "·" }, bin, v.unwrap_or_else(|| miss.into()));
     }
     0
 }

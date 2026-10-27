@@ -32,6 +32,8 @@ Running several coding agents at once tends to break in the same few ways:
 | "What happened overnight?" | An **append-only event log** and per-task logs on disk. `musher resume` continues after crashes, Ctrl-C or edits |
 | Babysitting a terminal | `--bg`, then `musher watch` from any terminal and `musher wait` from scripts. A desktop notification fires when the run ends |
 | Runaway spend | Per-task and per-run **cost tracking** plus `budget_usd` |
+| "Where do I even start?" | `musher plan "<goal>"`: an agent reads the repo and writes the task graph, with checks, for you to edit |
+| Telling people what landed | `musher report` (markdown: status, time, cost, files, each task's summary), `musher pr` opens one PR per task, `on_task`/`on_finish` hooks ping Slack, ntfy or anything |
 
 ## Install
 
@@ -63,6 +65,13 @@ musher do "Fix the flaky date test in utils/" --check "npm test -- utils"
 musher do "Add rate limiting to /login" --agent codex --bg
 ```
 
+Or let an agent write the plan from a goal, then run it and open PRs:
+
+```sh
+musher plan "Add subtract, multiply and divide commands with tests, and document them"
+musher run --bg && musher wait && musher pr --all --draft
+```
+
 ## musher.toml
 
 ```toml
@@ -76,6 +85,8 @@ permission = "acceptEdits"
 setup      = "npm ci"     # once per fresh worktree
 budget_usd = 5.0          # stop starting new tasks past this spend
 allow      = ["Bash(npm run lint:*)"]   # extra tools allowed; each task's check is always allowed
+on_task    = "say \"$MUSHER_TASK $MUSHER_STATUS\""                           # hook after each task
+on_finish  = "curl -sS -d \"musher $MUSHER_STATUS $MUSHER_DONE/$MUSHER_TOTAL\" ntfy.sh/me"   # hook when the run ends
 
 [[task]]
 id     = "api"
@@ -118,8 +129,11 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 |---|---|
 | `musher run [-j N] [--only a,b] [--dry-run] [--bg]` | run the plan (`--only` pulls in dependencies) |
 | `musher do "<prompt>" [--agent] [--check] [--id] [--model] [--bg]` | one-off task |
+| `musher plan "<goal>" [--out f] [--print] [--force]` | an agent reads the repo and writes `musher.toml`: 2–6 tasks with checks and dependencies; your `[settings]` are kept |
 | `musher resume [run]` | continue a stopped or failed run |
-| `musher watch` / `status [--json]` / `wait` / `ls` | observe from anywhere; `wait` exits 0 only if all tasks are done |
+| `musher stop [run]` | stop a background run; agents are terminated, finished work is kept |
+| `musher watch` / `status [--json]` / `wait` / `ls [--json]` | observe from anywhere; `wait` exits 0 only if all tasks are done |
+| `musher report [run] [task…]` | markdown report: status, attempts, time, cost, files changed and every task's own summary (also written to `report.md` when a run ends) |
 | `musher logs <task> [-f] [--raw]` | readable agent transcript (tools used, answers, denials) and check output |
 | `musher events [-f] [--json]` | the durable event log |
 | `musher diff <task> [--stat] [--all]` | the task's own changes (`--all` includes stacked dependencies) |
@@ -127,9 +141,22 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 | `musher attach <task>` | drop into the session **interactively** in its worktree (`claude --resume …`) |
 | `musher merge [task…]` | land finished work: merges only the top branches (stacked ones come along), and aborts cleanly on conflict |
 | `musher merge --resolve` | an `integrate` task stacks every finished branch, an agent resolves conflicts, all checks must pass, then that one branch is merged |
+| `musher pr <task…> \| --all [--draft] [--base b]` | push each task branch and open a pull request with the task's report and diff stat as body (needs `gh`) |
 | `musher mem ["note"] [--edit] [--clear]` | shared team notes injected into every prompt |
 | `musher clean [--purge]` | remove worktrees (`--purge` also removes branches and history) |
 | `musher doctor` | check git and installed agents |
+| `musher completions <zsh\|bash\|fish>` | shell completion for commands, task ids and run ids |
+
+### Hooks
+
+`on_task` runs after every task reaches a final state, `on_finish` once when the run ends. Both are shell commands run from the repo root with the result in environment variables, so they work with anything: `say`, `notify-send`, `curl` to Slack or ntfy, or a script of yours.
+
+| hook | variables |
+|---|---|
+| `on_task` | `MUSHER_RUN`, `MUSHER_TASK`, `MUSHER_STATUS` (done/failed/blocked/skipped/stopped), `MUSHER_NOTE`, `MUSHER_COST`, `MUSHER_BRANCH`, `MUSHER_SUMMARY` (path to the task's summary) |
+| `on_finish` | `MUSHER_RUN`, `MUSHER_STATUS` (done/incomplete/stopped), `MUSHER_DONE`, `MUSHER_TOTAL`, `MUSHER_COST`, `MUSHER_REPORT` (path to `report.md`) |
+
+Hooks never block the run: musher waits up to 10 s, a slower hook keeps running on its own, and its output goes to `.musher/runs/<id>/hooks.log`. A failing hook is an event, not an error.
 
 ### Let an agent be the lead
 
@@ -150,8 +177,8 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 |---|---|---|
 | Core idea | Multiplex interactive agent terminals | Run a graph of agent tasks to a verified result |
 | Runtime model | Background server owns the PTYs | No server: a run is a process plus files in `.musher/` |
-| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (705 KB, measured) |
-| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **2.8 MB RSS** (8 agents, measured) |
+| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (738 KB, measured) |
+| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **3.1 MB RSS** (8 agents, measured) |
 | Idle cost | Server process stays resident | **Nothing runs** between runs |
 | Agent state | Process name + **screen-pattern manifests**; new prompts "may initially show as `idle` instead of `blocked`"² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
 | Isolation between agents | Worktree workspaces **on request** (`herdr worktree create`); by default panes share one checkout | **Worktree + branch per task**, automatic, stacked by dependency |
@@ -162,7 +189,9 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 | History | Live state; no durable event history² | **Append-only JSONL events**, per-task logs, run snapshots |
 | Crash / restart | Restart restores layout; conversations only where session ids were recorded² | `musher resume`: finished work kept, sessions resumed |
 | Cost control | — | Cost per task and run, `budget_usd` |
-| Landing the work | Manual | `musher diff`, `musher merge` (dependency order) |
+| Planning | You type into each pane | `musher plan "<goal>"` drafts the task graph from the repo |
+| Landing the work | Manual | `musher diff`, `musher merge` (dependency order), `musher pr` (one PR per task), `musher report` |
+| Notifications | Sounds in the UI | `on_task` / `on_finish` shell hooks (Slack, ntfy, anything) |
 | Watching agents type live, mouse, splits | **Yes, this is Herdr's strength** | Not a multiplexer: `logs -f`, `watch`, `attach` |
 | Remote thin client, plugin marketplace | **Yes** | No (it's a CLI; run it over SSH) |
 | Config | `config.toml` (keys, UI, sounds) | `musher.toml` (tasks), strict validation |
@@ -173,7 +202,7 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 
 ## Design notes
 
-* **Small on purpose.** About 3k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
+* **Small on purpose.** About 3.5k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
 * **Files are the API.** `.musher/runs/<id>/state.json` is rewritten atomically, `events.jsonl` is append-only, and `logs/` and `out/` hold plain text. Anything can read them.
 * **Safe defaults.** The default permission mode is `acceptEdits`. Agents never push. `.musher/` is hidden through `.git/info/exclude`, so your `.gitignore` is never touched. Ctrl-C terminates whole agent process groups, so no orphan processes are left behind.
 * **Platforms:** macOS and Linux. Windows is untested (WSL should work).

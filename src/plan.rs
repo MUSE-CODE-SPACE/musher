@@ -41,6 +41,12 @@ pub struct Settings {
     /// Extra tools the agent may use without asking ({allow}), e.g. ["Bash(npm run lint:*)"].
     /// A task's own `check` command is always allowed so the agent can verify itself.
     pub allow: Vec<String>,
+    /// Shell command run when a task reaches a final state. Env: MUSHER_RUN, MUSHER_TASK,
+    /// MUSHER_STATUS, MUSHER_NOTE, MUSHER_COST, MUSHER_BRANCH, MUSHER_SUMMARY (path).
+    pub on_task: Option<String>,
+    /// Shell command run once when the run ends. Env: MUSHER_RUN, MUSHER_STATUS (done|incomplete|stopped),
+    /// MUSHER_COST, MUSHER_DONE, MUSHER_TOTAL, MUSHER_REPORT (path to the markdown report).
+    pub on_finish: Option<String>,
 }
 
 impl Default for Settings {
@@ -57,6 +63,8 @@ impl Default for Settings {
             budget_usd: 0.0,
             setup: None,
             allow: Vec::new(),
+            on_task: None,
+            on_finish: None,
         }
     }
 }
@@ -300,6 +308,8 @@ permission = "acceptEdits"
 # setup    = "npm ci"     # runs once in every fresh worktree
 # budget_usd = 5.0        # stop scheduling new tasks after this spend
 # allow    = ["Bash(npm run lint:*)"]   # extra tools allowed without asking (each task's check is always allowed)
+# on_task   = "say \"$MUSHER_TASK $MUSHER_STATUS\""                 # hook after each task (env: MUSHER_TASK/STATUS/NOTE/COST)
+# on_finish = "curl -sS -d \"musher: $MUSHER_STATUS $MUSHER_DONE/$MUSHER_TOTAL\" ntfy.sh/my-topic"   # hook when the run ends
 
 [[task]]
 id     = "api"

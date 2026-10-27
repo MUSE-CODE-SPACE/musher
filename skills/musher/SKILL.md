@@ -17,7 +17,11 @@ musher diff <short-id> --stat
 
 ## Several tasks
 
-Write `musher.toml` at the repo root:
+Let musher draft the plan from a goal, or write `musher.toml` at the repo root yourself:
+
+```sh
+musher plan "<goal>" --print     # proposal only; drop --print to write musher.toml (--force replaces existing tasks)
+```
 
 ```toml
 [settings]
@@ -38,10 +42,13 @@ Then run `musher run --bg && musher wait --json`.
 
 ## After a run
 
+- `musher report`: markdown summary of the run (status, time, cost, each task's summary). Paste it when you tell the user what happened.
+- `musher stop`: stop a background run; finished tasks are kept.
 - `musher logs <id>`: what the agent did, and why a check failed.
 - `musher ask <id> "<follow-up>"`: continue in the same session, then re-check.
 - `musher resume`: re-run unfinished tasks after you fix the plan.
 - `musher merge`: land finished branches, in dependency order. Ask the user before you merge.
+- `musher pr <id>` or `musher pr --all --draft`: push task branches and open pull requests (needs `gh`). Ask the user before you push.
 - `musher mem "<fact every agent should know>"`: add to the shared team notes.
 
 ## Rules

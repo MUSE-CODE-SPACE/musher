@@ -128,8 +128,73 @@ pub fn execute(ctx: Arc<Ctx>, ui: &mut dyn Observer) -> bool {
         s.finished = true;
     });
     ctx.run.event("", if STOP.load(Ordering::SeqCst) { "stopped" } else { "finished" }, "");
+    let snap = ctx.run.snapshot();
+    let report = crate::report::write(&ctx.run.dir, &snap);
+    if let Some(cmd) = &ctx.plan.settings.on_finish {
+        let done = snap.tasks.iter().filter(|t| t.status == Status::Done).count();
+        let env = vec![
+            ("MUSHER_RUN", snap.id.clone()),
+            ("MUSHER_STATUS", crate::report::run_outcome(&snap).to_string()),
+            ("MUSHER_COST", format!("{:.2}", snap.cost())),
+            ("MUSHER_DONE", done.to_string()),
+            ("MUSHER_TOTAL", snap.tasks.len().to_string()),
+            ("MUSHER_REPORT", report.to_string_lossy().to_string()),
+        ];
+        run_hook(&ctx, "", cmd, env);
+    }
     ui.finish(&ctx.run);
-    ctx.run.snapshot().tasks.iter().all(|t| t.status == Status::Done)
+    snap.tasks.iter().all(|t| t.status == Status::Done)
+}
+
+/// Fire a user hook and wait briefly; a slow hook keeps running on its own (its output goes to
+/// hooks.log) so it never holds the scheduler. Failures are events, not errors.
+fn run_hook(ctx: &Ctx, task: &str, cmd: &str, env: Vec<(&'static str, String)>) {
+    let log = OpenOptions::new().create(true).append(true).open(ctx.run.dir.join("hooks.log")).ok();
+    let (out, err) = match log {
+        Some(f) => (Stdio::from(f.try_clone().unwrap()), Stdio::from(f)),
+        None => (Stdio::null(), Stdio::null()),
+    };
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cmd).current_dir(&ctx.root).stdin(Stdio::null()).stdout(out).stderr(err);
+    c.env("MUSHER_ROOT", &ctx.root);
+    for (k, v) in &env {
+        c.env(k, v);
+    }
+    let hook = if task.is_empty() { "on_finish" } else { "on_task" };
+    match c.spawn() {
+        Ok(mut child) => {
+            let start = Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(st)) if !st.success() => {
+                        ctx.run.event(task, "hook-failed", &format!("{hook} exited {}", st.code().unwrap_or(-1)));
+                        break;
+                    }
+                    Ok(Some(_)) => break,
+                    Ok(None) if start.elapsed() < Duration::from_secs(10) => thread::sleep(Duration::from_millis(50)),
+                    _ => break,
+                }
+            }
+        }
+        Err(e) => ctx.run.event(task, "hook-failed", &format!("{hook}: {e}")),
+    }
+}
+
+/// `on_task` hook for a task that just reached a final state.
+fn task_hook(ctx: &Ctx, id: &str) {
+    let Some(cmd) = &ctx.plan.settings.on_task else { return };
+    let snap = ctx.run.snapshot();
+    let Some(t) = snap.task(id) else { return };
+    let env = vec![
+        ("MUSHER_RUN", snap.id.clone()),
+        ("MUSHER_TASK", id.to_string()),
+        ("MUSHER_STATUS", t.status.as_str().to_string()),
+        ("MUSHER_NOTE", t.note.clone()),
+        ("MUSHER_COST", format!("{:.2}", t.cost_usd)),
+        ("MUSHER_BRANCH", t.branch.clone()),
+        ("MUSHER_SUMMARY", ctx.run.out_path(id).to_string_lossy().to_string()),
+    ];
+    run_hook(ctx, id, cmd, env);
 }
 
 fn agent_spec<'a>(ctx: &'a Ctx, task: &Task) -> (&'a str, &'a AgentSpec) {
@@ -140,6 +205,13 @@ fn agent_spec<'a>(ctx: &'a Ctx, task: &Task) -> (&'a str, &'a AgentSpec) {
 
 /// Full lifecycle of one task. `followup` is a message for `musher ask`.
 pub fn run_task(ctx: &Ctx, id: &str, followup: Option<&str>) {
+    run_task_inner(ctx, id, followup);
+    if ctx.run.snapshot().task(id).is_some_and(|t| t.status.is_final()) {
+        task_hook(ctx, id);
+    }
+}
+
+fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
     let task = ctx.plan.task(id).expect("task in plan").clone();
     let run = &ctx.run;
     let (_, spec) = agent_spec(ctx, &task);

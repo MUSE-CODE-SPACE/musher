@@ -32,6 +32,8 @@ musher run 261027-1102  3/5 done  2 active  $0.41  04:12
 | "밤새 무슨 일이 있었지?" | **추가 전용 이벤트 로그**와 태스크별 로그를 디스크에 보존. 크래시, Ctrl-C, 계획 수정 후에도 `musher resume`으로 이어서 실행 |
 | 터미널을 지키고 있어야 함 | `--bg`로 띄워 두고 어느 터미널에서든 `musher watch`, 스크립트에서는 `musher wait`. 완료되면 데스크톱 알림 |
 | 비용 폭주 | 태스크·런별 **비용 추적**과 `budget_usd` 상한 |
+| "뭐부터 쪼개지?" | `musher plan "<목표>"`: 에이전트가 저장소를 읽고 check까지 갖춘 태스크 그래프를 써 주면 고쳐서 실행 |
+| 결과를 알리고 올리기 | `musher report`(상태·시간·비용·파일·요약 마크다운), `musher pr`로 태스크마다 PR 생성, `on_task`/`on_finish` 훅으로 Slack·ntfy 등 어디로든 알림 |
 
 ## 설치
 
@@ -63,6 +65,13 @@ musher do "utils/의 깨지는 날짜 테스트 고쳐줘" --check "npm test -- 
 musher do "/login에 rate limit 추가" --agent codex --bg
 ```
 
+목표만 주고 계획은 에이전트에게 맡긴 뒤, 실행하고 PR까지 열 수도 있습니다.
+
+```sh
+musher plan "subtract, multiply, divide 명령을 테스트와 함께 추가하고 README에 문서화"
+musher run --bg && musher wait && musher pr --all --draft
+```
+
 ## musher.toml
 
 ```toml
@@ -75,6 +84,8 @@ retries    = 2            # 검증 실패 후 수정 시도 횟수
 permission = "acceptEdits"
 setup      = "npm ci"     # 새 worktree마다 1회 실행
 budget_usd = 5.0          # 이 금액을 넘으면 새 태스크를 시작하지 않음
+on_task    = "say \"$MUSHER_TASK $MUSHER_STATUS\""                           # 태스크가 끝날 때마다
+on_finish  = "curl -sS -d \"musher $MUSHER_STATUS $MUSHER_DONE/$MUSHER_TOTAL\" ntfy.sh/me"   # 런이 끝날 때
 allow      = ["Bash(npm run lint:*)"]   # 추가로 허용할 도구 (각 태스크의 check 명령은 항상 허용)
 
 [[task]]
@@ -114,8 +125,11 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 |---|---|
 | `musher run [-j N] [--only a,b] [--dry-run] [--bg]` | 계획 실행 (`--only`는 의존 태스크도 함께 포함) |
 | `musher do "<프롬프트>" [--agent] [--check] [--id] [--model] [--bg]` | 일회성 태스크 |
+| `musher plan "<목표>" [--out f] [--print] [--force]` | 에이전트가 저장소를 읽고 `musher.toml`을 작성: check와 의존성을 갖춘 2~6개 태스크. 기존 `[settings]`는 유지 |
 | `musher resume [run]` | 중단·실패한 런 이어서 실행 |
-| `musher watch` / `status [--json]` / `wait` / `ls` | 어디서든 관찰. `wait`는 전부 done일 때만 exit 0 |
+| `musher stop [run]` | 백그라운드 런 중단. 에이전트는 종료되고 완료분은 유지 |
+| `musher watch` / `status [--json]` / `wait` / `ls [--json]` | 어디서든 관찰. `wait`는 전부 done일 때만 exit 0 |
+| `musher report [run] [task…]` | 마크다운 보고서: 상태·시도 횟수·시간·비용·변경 파일 수와 태스크별 요약 (런 종료 시 `report.md`로도 저장) |
 | `musher logs <task> [-f] [--raw]` | 읽기 쉬운 트랜스크립트(사용한 도구, 답변, 권한 거부)와 검증 출력 |
 | `musher events [-f] [--json]` | 영구 이벤트 로그 |
 | `musher diff <task> [--stat] [--all]` | 태스크 고유 변경분 (`--all`은 쌓인 의존 변경분 포함) |
@@ -123,9 +137,22 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 | `musher attach <task>` | 해당 worktree에서 세션에 **대화형으로** 접속 |
 | `musher merge [task…]` | 완료된 작업 반영. 최상위 브랜치만 병합(쌓인 브랜치는 함께 들어옴), 충돌 시 깨끗하게 되돌림 |
 | `musher merge --resolve` | `integrate` 태스크가 모든 완료 브랜치를 쌓고, 에이전트가 충돌을 해결하고, 전체 check를 통과한 뒤에만 병합 |
+| `musher pr <task…> \| --all [--draft] [--base b]` | 태스크 브랜치를 push하고 보고서와 diff stat을 본문으로 PR 생성 (`gh` 필요) |
 | `musher mem ["메모"] [--edit] [--clear]` | 모든 프롬프트에 주입되는 팀 공유 메모 |
 | `musher clean [--purge]` | worktree 정리 (`--purge`는 브랜치와 기록까지 삭제) |
 | `musher doctor` | git과 설치된 에이전트 점검 |
+| `musher completions <zsh\|bash\|fish>` | 명령·태스크 id·런 id 셸 자동완성 |
+
+### 훅
+
+`on_task`는 태스크가 끝날 때마다, `on_finish`는 런이 끝날 때 한 번 실행되는 셸 명령입니다. 결과는 환경 변수로 전달되므로 `say`, `notify-send`, Slack·ntfy로 `curl`, 직접 만든 스크립트 등 무엇이든 연결할 수 있습니다.
+
+| 훅 | 변수 |
+|---|---|
+| `on_task` | `MUSHER_RUN`, `MUSHER_TASK`, `MUSHER_STATUS`(done/failed/blocked/skipped/stopped), `MUSHER_NOTE`, `MUSHER_COST`, `MUSHER_BRANCH`, `MUSHER_SUMMARY`(요약 파일 경로) |
+| `on_finish` | `MUSHER_RUN`, `MUSHER_STATUS`(done/incomplete/stopped), `MUSHER_DONE`, `MUSHER_TOTAL`, `MUSHER_COST`, `MUSHER_REPORT`(`report.md` 경로) |
+
+훅은 런을 막지 않습니다. 최대 10초만 기다리고 느린 훅은 따로 계속 돌며, 출력은 `.musher/runs/<id>/hooks.log`에 남습니다. 훅 실패는 이벤트로 기록될 뿐 런을 실패시키지 않습니다.
 
 ### 에이전트를 리더로 쓰기
 
@@ -146,7 +173,7 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 |---|---|---|
 | 핵심 개념 | 대화형 에이전트 터미널 다중화 | 에이전트 태스크 그래프를 검증된 결과까지 실행 |
 | 실행 모델 | 백그라운드 서버가 PTY 소유 | 서버 없음: 런 = 프로세스 + `.musher/` 파일 |
-| 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.7 MB** (705 KB 실측) |
+| 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.7 MB** (738 KB 실측) |
 | 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 2.8 MB** (에이전트 8개, 실측) |
 | 유휴 비용 | 서버 상주 | **아무것도 안 돎** |
 | 상태 판정 | 프로세스명 + **화면 패턴 매니페스트**. 새로운 프롬프트는 "처음에 `blocked` 대신 `idle`로 보일 수 있음"² | 에이전트의 **구조화 이벤트**(세션 id, 도구, 비용, 최종 답, 권한 거부) + 종료 코드 |
@@ -158,7 +185,9 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 | 기록 | 실시간 상태만, 영구 이벤트 기록 없음² | **JSONL 이벤트**, 태스크 로그, 런 스냅샷 |
 | 크래시/재시작 | 레이아웃 복원, 대화는 세션 id 기록분만² | `musher resume`: 완료분 유지, 세션 재개 |
 | 비용 통제 | — | 태스크/런 비용, `budget_usd` |
-| 결과 반영 | 수동 | `musher diff`, `musher merge` (의존성 순) |
+| 계획 | 창마다 직접 타이핑 | `musher plan "<목표>"`가 저장소를 읽고 태스크 그래프 초안 작성 |
+| 결과 반영 | 수동 | `musher diff`, `musher merge` (의존성 순), `musher pr` (태스크별 PR), `musher report` |
+| 알림 | UI 효과음 | `on_task` / `on_finish` 셸 훅 (Slack, ntfy 등 무엇이든) |
 | 에이전트 화면 실시간 보기, 마우스, 분할 | **예 (Herdr의 강점)** | 멀티플렉서 아님: `logs -f`, `watch`, `attach` |
 | 원격 씬 클라이언트, 플러그인 마켓 | **예** | 없음 (CLI이므로 SSH로 사용) |
 
@@ -168,7 +197,7 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 
 ## 설계 원칙
 
-* **일부러 작게.** Rust 약 3k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
+* **일부러 작게.** Rust 약 3.5k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
 * **파일이 곧 API.** `state.json`은 원자적으로 교체되고, `events.jsonl`은 추가만 하며, `logs/`와 `out/`은 평문입니다. 어떤 도구로든 읽을 수 있습니다.
 * **안전한 기본값.** 기본 권한은 `acceptEdits`이고, 에이전트는 절대 push하지 않습니다. `.musher/`는 `.git/info/exclude`로 숨기므로 `.gitignore`를 건드리지 않습니다. Ctrl-C를 누르면 에이전트 프로세스 그룹 전체를 종료하므로 고아 프로세스가 남지 않습니다.
 * **지원 플랫폼:** macOS, Linux. Windows는 미검증입니다(WSL 권장).
