@@ -1,6 +1,6 @@
 [package]
 name = "musher"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Drive a team of AI coding agents: isolated worktrees, task DAG, verify-and-fix loops, durable event log. One small binary, no server."
 license = "MIT"
