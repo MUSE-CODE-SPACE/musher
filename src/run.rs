@@ -312,7 +312,14 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
             return;
         }
         if out.timed_out {
-            run.set_status(id, Status::Failed, &format!("timed out after {}s", timeout.as_secs()));
+            let secs = timeout.as_secs();
+            if attempt < retries {
+                // Work so far is committed; the resumed session picks up where it stopped.
+                run.event(id, "timeout", &format!("after {secs}s, retrying"));
+                feedback = Some(format!("The previous attempt was stopped after {secs}s (time limit). Your changes so far are kept. Continue from where you left off and finish the task, keeping this attempt short."));
+                continue;
+            }
+            run.set_status(id, Status::Failed, &format!("timed out after {secs}s ({} attempts)", attempt + 1));
             return;
         }
         if !out.ok {

@@ -26,7 +26,7 @@ Running several coding agents at once tends to break in the same few ways:
 | Two agents edit the same checkout and clobber each other | One **git worktree + branch per task**, created and cleaned up for you |
 | "B needs A's code first" | `after = ["a"]`: B starts **from A's branch, stacked**, with A's summary in its prompt |
 | Parallel branches conflict when they come together | The task that stacks them **asks its agent to resolve the conflict**. Musher refuses leftover markers, then runs the check. `musher merge --resolve` does the same for a whole run |
-| The agent says "done" but the tests are red | `check = "npm test"` is a **gate**. On failure the output goes back into the *same* agent session, which tries again |
+| The agent says "done" but the tests are red | `check = "npm test"` is a **gate**. On failure the output goes back into the *same* agent session, which tries again. A timed-out attempt is resumed the same way, with its work so far kept |
 | Squinting at panes to guess who is blocked | State comes from the agent's **structured event stream** (Claude `stream-json`, Codex `--json`), not from screen scraping |
 | Context lost between agents | **Shared team notes** (`musher mem`) plus **upstream handoff** summaries go into every prompt |
 | "What happened overnight?" | An **append-only event log** and per-task logs on disk. `musher resume` continues after crashes, Ctrl-C or edits |
