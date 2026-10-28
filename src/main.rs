@@ -26,7 +26,7 @@ const HELP: &str = "musher — drive a team of AI coding agents from one small b
 USAGE
   musher init                       write musher.toml and set up .musher/
   musher run [-j N] [--only a,b]    run the task graph in musher.toml (--only pulls in dependencies; --no-deps: just those tasks, from HEAD)
-  musher do \"<prompt>\" [opts]       one-off task: --agent, --check, --id, --retries
+  musher do \"<prompt>\" [opts]       one-off task: --agent, --check, --id, --retries; --after a,b adds it to the latest run on top of those tasks
   musher resume [run]               continue a stopped or failed run (done tasks are kept)
   musher stop [run]                 stop a background run (agents are terminated, work is kept)
   musher plan \"<goal>\" [--out f]     let an agent split a goal into a musher.toml task graph (--model: for planning and the tasks)
@@ -83,6 +83,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--remote",
     "--title",
     "--older",
+    "--after",
 ];
 
 impl Args {
@@ -532,20 +533,24 @@ fn cmd_do(args: &Args, raw: &[String]) -> i32 {
     if prompt.trim().is_empty() {
         die("usage: musher do \"<prompt>\" [--agent claude] [--check \"npm test\"] [--id name]");
     }
-    let mut plan = load_plan(&e, args);
     let id = args.get("--id").map(String::from).unwrap_or_else(|| slug(&prompt));
-    plan.tasks = vec![Task {
+    let task = Task {
         id,
         prompt,
         agent: args.get("--agent").map(String::from),
-        after: vec![],
+        after: args.get("--after").map(|a| a.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
         check: args.get("--check").map(String::from),
         retries: args.get("--retries").map(|r| r.parse().unwrap_or_else(|_| die("--retries needs a number"))),
         timeout: None,
         permission: args.get("--permission").map(String::from),
         model: args.get("--model").map(String::from),
         allow: vec![],
-    }];
+    };
+    if !task.after.is_empty() {
+        return do_after(&e, args, task);
+    }
+    let mut plan = load_plan(&e, args);
+    plan.tasks = vec![task];
     plan.validate().unwrap_or_else(|err| die(&err));
     if args.has("--bg") {
         new_run_preflight(&e, &plan);
@@ -553,6 +558,62 @@ fn cmd_do(args: &Args, raw: &[String]) -> i32 {
     }
     let run = new_run(&e, &plan, args);
     drive(&e, plan, run, args)
+}
+
+/// `musher do "…" --after a,b`: append the task to an existing run so it starts from those
+/// tasks' branches (stacked) with their summaries in its prompt.
+fn do_after(e: &Env, args: &Args, task: Task) -> i32 {
+    let dir = find_run(e, args);
+    let st = load_state(&dir).unwrap_or_else(|err| die(&err));
+    if !st.finished && pid_alive(st.pid) {
+        die(&format!("run {} is still in progress — wait for it or `musher stop` first", st.id));
+    }
+    if st.task(&task.id).is_some() {
+        die(&format!("run {} already has a task {:?} — pick another --id", st.id, task.id));
+    }
+    for d in &task.after {
+        match st.task(d) {
+            None => die(&format!("run {} has no task {d:?} — see `musher status`", st.id)),
+            Some(t) if t.status != Status::Done => die(&format!("{d} is {} — `--after` needs a finished task", t.status.as_str())),
+            _ => {}
+        }
+    }
+    if args.has("--bg") {
+        die("--after and --bg do not combine yet; run it in the foreground");
+    }
+    let mut plan = load_run_plan(&dir);
+    apply_overrides(&mut plan, args);
+    plan.tasks.push(task.clone());
+    plan.validate().unwrap_or_else(|err| die(&err));
+    fs::write(dir.join("plan.json"), serde_json::to_vec_pretty(&plan).unwrap()).ok();
+    let run = Arc::new(Run::open(dir).unwrap_or_else(|err| die(&err)));
+    let agent = task.agent.clone().unwrap_or_else(|| plan.settings.agent.clone());
+    run.update(|s| {
+        s.finished = false;
+        s.ended = 0;
+        s.tasks.push(TaskState {
+            id: task.id.clone(),
+            agent,
+            status: Status::Queued,
+            after: task.after.clone(),
+            branch: String::new(),
+            worktree: String::new(),
+            start: String::new(),
+            session: String::new(),
+            attempts: 0,
+            started: 0,
+            ended: 0,
+            cost_usd: 0.0,
+            tokens: 0,
+            activity: String::new(),
+            note: String::new(),
+            check: None,
+            files_changed: 0,
+            pid: 0,
+        });
+    });
+    run.event(&task.id, "added", &format!("after {}", task.after.join(", ")));
+    drive(e, plan, run, args)
 }
 
 fn slug(s: &str) -> String {
