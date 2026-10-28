@@ -46,6 +46,7 @@ Then run `musher run --bg && musher wait --json`.
 - `musher stop`: stop a background run; finished tasks are kept.
 - `musher logs <id>`: what the agent did, and why a check failed.
 - `musher ask <id> "<follow-up>"`: continue in the same session, then re-check.
+- `musher check <id>`: after fixing files in the task's worktree yourself, commit and re-run only the check.
 - `musher resume`: re-run unfinished tasks after you fix the plan.
 - `musher merge`: land finished branches, in dependency order. Ask the user before you merge.
 - `musher pr <id>` or `musher pr --all --draft`: push task branches and open pull requests (needs `gh`). Ask the user before you push.

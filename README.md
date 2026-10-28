@@ -140,6 +140,7 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 | `musher diff <task> [--stat] [--all]` | the task's own changes (`--all` includes stacked dependencies) |
 | `musher ask <task> "<msg>"` | follow up in the same agent session, then re-check |
 | `musher attach <task>` | drop into the session **interactively** in its worktree (`claude --resume …`) |
+| `musher check <task>` | you edited the worktree yourself: commit that and re-run the check, without calling the agent |
 | `musher merge [task…]` | land finished work: merges only the top branches (stacked ones come along), and aborts cleanly on conflict |
 | `musher merge --resolve` | an `integrate` task stacks every finished branch, an agent resolves conflicts, all checks must pass, then that one branch is merged |
 | `musher pr <task…> \| --all [--draft] [--base b]` | push each task branch and open a pull request with the task's report and diff stat as body (needs `gh`) |

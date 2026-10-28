@@ -418,6 +418,48 @@ fn needs_human(err: &str) -> bool {
     .any(|p| e.contains(p))
 }
 
+/// `musher check <task>`: after hand edits in the worktree, commit them and re-run the check
+/// without calling the agent. Returns true when the task is done.
+pub fn recheck(ctx: &Ctx, id: &str) -> bool {
+    let task = ctx.plan.task(id).expect("task in plan").clone();
+    let run = &ctx.run;
+    let mut log = Log::open(&run.log_path(id));
+    let snap = run.snapshot();
+    let t = snap.task(id).expect("task state");
+    let cwd = if snap.isolation == "worktree" { PathBuf::from(&t.worktree) } else { ctx.root.clone() };
+    if snap.isolation == "worktree" && !cwd.join(".git").exists() {
+        run.set_status(id, Status::Failed, "worktree is gone (musher clean?) — `musher resume` recreates it");
+        return false;
+    }
+    let base = if t.start.is_empty() { snap.base_commit.clone() } else { t.start.clone() };
+    log.section("check (manual, no agent)");
+    if ctx.plan.settings.auto_commit && snap.isolation == "worktree" {
+        match git::commit_all(&cwd, &format!("musher({id}): manual edits")) {
+            Ok(true) => log.line("== committed manual edits"),
+            Ok(false) => {}
+            Err(e) => {
+                run.set_status(id, Status::Failed, &agent::clip(&format!("could not commit: {e}"), 120));
+                return false;
+            }
+        }
+    }
+    let summary = fs::read_to_string(run.out_path(id)).unwrap_or_default();
+    let Some(check) = task.check.as_deref() else {
+        finish_done(ctx, id, &cwd, &base, &summary, &[]);
+        return true;
+    };
+    run.set_status(id, Status::Checking, "");
+    let timeout = Duration::from_secs(parse_duration(task.timeout.as_deref().unwrap_or(&ctx.plan.settings.timeout)).unwrap_or(1800));
+    let (passed, code, _) = run_check(id, check, &cwd, timeout, &mut log);
+    run.task(id, |t| t.check = Some(passed));
+    if passed {
+        finish_done(ctx, id, &cwd, &base, &summary, &[]);
+    } else {
+        run.set_status(id, Status::Failed, &format!("check failed (exit {code}) — manual check"));
+    }
+    passed
+}
+
 fn finish_done(ctx: &Ctx, id: &str, cwd: &Path, base: &str, summary: &str, denied: &[String]) {
     let files = if ctx.run.snapshot().isolation == "worktree" { git::files_changed(cwd, base) } else { 0 };
     let _ = fs::write(ctx.run.out_path(id), summary);

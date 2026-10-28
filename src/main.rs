@@ -41,6 +41,7 @@ USAGE
 
   musher diff <task> [--stat]       what a task changed (--all: including stacked deps)
   musher ask <task> \"<message>\"     follow up in the task's agent session, then re-check
+  musher check <task>               after editing the worktree yourself: commit and re-run the check, no agent
   musher attach <task>              open the task's session interactively in its worktree
   musher merge [task...]            merge finished task branches into your current branch
   musher merge --resolve            let an agent integrate all finished tasks (conflicts too), verify, then merge
@@ -167,6 +168,7 @@ fn main() {
         "events" => cmd_events(&args),
         "diff" => cmd_diff(&args),
         "ask" => cmd_ask(&args),
+        "check" | "verify" => cmd_check(&args),
         "attach" => cmd_attach(&args),
         "merge" => cmd_merge(&args),
         "mem" | "memory" => cmd_mem(&args),
@@ -937,7 +939,7 @@ fn extract_toml(s: &str) -> String {
 fn cmd_completions(args: &Args) -> i32 {
     const CMDS: &str =
         "init run do resume stop plan watch status wait ls report logs events diff ask attach merge pr mem clean doctor completions help version";
-    const TASK_CMDS: &str = "logs diff ask attach pr";
+    const TASK_CMDS: &str = "logs diff ask check attach pr";
     const RUN_CMDS: &str = "resume stop watch wait report";
     match args.pos.first().map(String::as_str) {
         Some("zsh") => print!(
@@ -1236,6 +1238,36 @@ fn cmd_ask(args: &Args) -> i32 {
         }
     }
     if t.status == Status::Done {
+        0
+    } else {
+        1
+    }
+}
+
+/// Re-run a task's check on whatever is in its worktree now (your own edits included).
+fn cmd_check(args: &Args) -> i32 {
+    let e = env();
+    let (dir, st, t) = run_task_state(&e, args, "usage: musher check <task>");
+    if !st.finished && pid_alive(st.pid) {
+        die(&format!("run {} is still in progress (pid {}) — wait for it or `musher stop` first", st.id, st.pid));
+    }
+    let mut plan = load_run_plan(&dir);
+    plan.tasks.retain(|x| x.id == t.id);
+    let run = Arc::new(Run::open(dir).unwrap_or_else(|err| die(&err)));
+    run.update(|s| {
+        s.pid = std::process::id();
+        s.finished = false;
+    });
+    run.event(&t.id, "check", "manual");
+    let ctx = Ctx { root: e.root.clone(), home: e.home.clone(), plan, run: run.clone() };
+    let ok = run::recheck(&ctx, &t.id);
+    run.update(|s| {
+        s.finished = true;
+        s.ended = now();
+    });
+    let t = run.snapshot().task(&t.id).cloned().unwrap();
+    println!("{} {}{}", t.id, t.status.as_str(), if t.note.is_empty() { String::new() } else { format!(" — {}", t.note) });
+    if ok {
         0
     } else {
         1

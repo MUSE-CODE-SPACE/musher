@@ -136,6 +136,7 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 | `musher diff <task> [--stat] [--all]` | 태스크 고유 변경분 (`--all`은 쌓인 의존 변경분 포함) |
 | `musher ask <task> "<메시지>"` | 같은 세션에 후속 지시 → 재검증 |
 | `musher attach <task>` | 해당 worktree에서 세션에 **대화형으로** 접속 |
+| `musher check <task>` | worktree를 직접 고쳤을 때: 그 변경을 커밋하고 에이전트 없이 check만 다시 실행 |
 | `musher merge [task…]` | 완료된 작업 반영. 최상위 브랜치만 병합(쌓인 브랜치는 함께 들어옴), 충돌 시 깨끗하게 되돌림 |
 | `musher merge --resolve` | `integrate` 태스크가 모든 완료 브랜치를 쌓고, 에이전트가 충돌을 해결하고, 전체 check를 통과한 뒤에만 병합 |
 | `musher pr <task…> \| --all [--draft] [--base b]` | 태스크 브랜치를 push하고 보고서와 diff stat을 본문으로 PR 생성 (`gh` 필요) |
