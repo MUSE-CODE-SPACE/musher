@@ -83,14 +83,15 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 
 impl Args {
-    fn parse(raw: &[String]) -> Args {
+    /// `follow`: the command uses `-f` as "follow" (logs, events), not as the plan-file flag.
+    fn parse(raw: &[String], follow: bool) -> Args {
         let (mut pos, mut flags) = (Vec::new(), HashMap::new());
         let mut i = 0;
         while i < raw.len() {
             let a = &raw[i];
             if let Some((k, v)) = a.split_once('=').filter(|(k, _)| k.starts_with("--")) {
                 flags.insert(k.to_string(), v.to_string());
-            } else if VALUE_FLAGS.contains(&a.as_str()) {
+            } else if VALUE_FLAGS.contains(&a.as_str()) && !(follow && a == "-f") {
                 let v = raw.get(i + 1).cloned().unwrap_or_else(|| die(&format!("{a} needs a value")));
                 flags.insert(a.clone(), v);
                 i += 1;
@@ -139,7 +140,7 @@ fn main() {
         print!("{HELP}");
         return;
     };
-    let args = Args::parse(&raw[1..]);
+    let args = Args::parse(&raw[1..], matches!(cmd.as_str(), "logs" | "log" | "events"));
     if args.has("--no-notify") {
         ui::set_notify(false);
     }
@@ -880,7 +881,18 @@ fn extract_toml(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_toml;
+    use super::{extract_toml, Args};
+
+    #[test]
+    fn dash_f_is_follow_only_for_log_commands() {
+        let raw: Vec<String> = ["api", "-f"].iter().map(|s| s.to_string()).collect();
+        let a = Args::parse(&raw, true);
+        assert!(a.has("-f") && a.pos == vec!["api".to_string()]);
+        let raw: Vec<String> = ["-f", "plan.toml", "--bg"].iter().map(|s| s.to_string()).collect();
+        let a = Args::parse(&raw, false);
+        assert_eq!(a.get("-f"), Some("plan.toml"));
+        assert!(a.has("--bg"));
+    }
 
     #[test]
     fn plan_output_shapes() {
@@ -1066,6 +1078,11 @@ fn cmd_events(args: &Args) -> i32 {
         if t.len() > seen {
             t[seen..].lines().for_each(print_line);
             seen = t.len();
+        } else if let Ok(st) = load_state(&dir) {
+            // Nothing new and the runner is gone: the log is complete.
+            if st.finished || !pid_alive(st.pid) {
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(300));
     }
