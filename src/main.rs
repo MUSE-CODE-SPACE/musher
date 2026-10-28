@@ -923,6 +923,7 @@ fn cmd_plan(args: &Args) -> i32 {
         },
     );
     eprintln!("musher: asking {name} to plan…");
+    let started = std::time::Instant::now();
     let o = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(&e.root)
@@ -930,7 +931,7 @@ fn cmd_plan(args: &Args) -> i32 {
         .output()
         .unwrap_or_else(|err| die(&format!("cannot start {}: {err}", argv[0])));
     let text = String::from_utf8_lossy(&o.stdout);
-    let (mut result, mut last) = (String::new(), String::new());
+    let (mut result, mut last, mut cost) = (String::new(), String::new(), 0.0);
     for line in text.lines() {
         let s = agent::parse_line(line);
         if let Some(r) = s.result {
@@ -939,7 +940,15 @@ fn cmd_plan(args: &Args) -> i32 {
         if let Some(t) = s.text {
             last = t;
         }
+        if let Some(c) = s.cost_usd {
+            cost += c;
+        }
     }
+    eprintln!(
+        "musher: plan ready in {}{}",
+        state::fmt_dur(started.elapsed().as_secs()),
+        if cost > 0.0 { format!(" · {}", state::fmt_cost(cost)) } else { String::new() }
+    );
     if result.is_empty() {
         result = if spec.raw { text.to_string() } else { last };
     }
