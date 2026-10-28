@@ -18,14 +18,50 @@ fn paint(on: bool, code: &str, s: &str) -> String {
     }
 }
 
-pub fn term_width() -> usize {
+fn term_size() -> (usize, usize) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
-    if ok && ws.ws_col > 20 {
-        ws.ws_col as usize
-    } else {
-        100
+    (if ok && ws.ws_col > 20 { ws.ws_col as usize } else { 100 }, if ok && ws.ws_row > 4 { ws.ws_row as usize } else { 40 })
+}
+
+pub fn term_width() -> usize {
+    term_size().0
+}
+
+/// The dashboard redraws in place with cursor-up, which breaks once it is taller than the
+/// terminal. Then collapse the quiet rows: finished tasks become one line, queued ones another,
+/// and everything active or needing attention stays visible.
+pub fn fit_height(s: &RunState, mut lines: Vec<String>, rows: usize, c: bool) -> Vec<String> {
+    if lines.len() < rows {
+        return lines;
     }
+    let keep = |t: &TaskState| t.status.is_active() || matches!(t.status, Status::Failed | Status::Blocked | Status::Stopped);
+    let head = lines.remove(0);
+    let mut out = vec![head];
+    let (mut done, mut queued, mut other) = (0, 0, 0);
+    for (t, line) in s.tasks.iter().zip(lines.iter()) {
+        match t.status {
+            _ if keep(t) => out.push(line.clone()),
+            Status::Done => done += 1,
+            Status::Queued => queued += 1,
+            _ => other += 1,
+        }
+    }
+    let mut folded = Vec::new();
+    if done > 0 {
+        folded.push(format!("{done} done"));
+    }
+    if queued > 0 {
+        folded.push(format!("{queued} queued"));
+    }
+    if other > 0 {
+        folded.push(format!("{other} skipped"));
+    }
+    if !folded.is_empty() {
+        out.push(paint(c, "2", &format!(" … {} (musher status shows all)", folded.join(", "))));
+    }
+    out.truncate(rows.saturating_sub(1).max(2));
+    out
 }
 
 const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
@@ -121,8 +157,8 @@ impl Live {
 
     pub fn draw(&mut self, s: &RunState) {
         let c = color();
-        let w = term_width();
-        let mut lines = render(s, self.frame, w, c);
+        let (w, h) = term_size();
+        let mut lines = fit_height(s, render(s, self.frame, w, c), h.saturating_sub(if self.hint && !s.finished { 1 } else { 0 }), c);
         if self.hint && !s.finished {
             lines.push(paint(c, "2", " Ctrl-C stops (resume later) · other terminal: musher watch · musher logs <task> -f"));
         }
