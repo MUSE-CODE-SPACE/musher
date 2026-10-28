@@ -354,6 +354,17 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         }
         if !out.ok {
             let why = if out.error.is_empty() { format!("agent exited with {}", out.code) } else { out.error.clone() };
+            // The saved session no longer exists (storage cleared, other machine): start fresh
+            // with the same feedback instead of retrying the dead session.
+            let resumed = std::ptr::eq(argv_t, &spec.resume);
+            if resumed && session_lost(&why) {
+                log.line(&format!("!! session {session} is gone; starting a fresh session"));
+                run.event(id, "session-lost", &agent::clip(&why, 100));
+                run.task(id, |t| t.session.clear());
+                if attempt < retries {
+                    continue;
+                }
+            }
             if needs_human(&why) {
                 // Quota, auth or billing: retrying only burns attempts. Hand it to a person.
                 run.set_status(id, Status::Blocked, &agent::clip(&why, 120));
@@ -393,6 +404,13 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         }
         return;
     }
+}
+
+/// The agent could not find the session we asked it to resume.
+fn session_lost(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    (e.contains("session") || e.contains("conversation") || e.contains("thread"))
+        && (e.contains("not found") || e.contains("no conversation") || e.contains("does not exist") || e.contains("unknown"))
 }
 
 /// Errors no retry can fix: the account, not the code, is the problem.
@@ -857,6 +875,14 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use super::needs_human;
+
+    #[test]
+    fn lost_sessions() {
+        use super::session_lost;
+        assert!(session_lost("No conversation found with session ID: 0000"));
+        assert!(session_lost("thread abc does not exist"));
+        assert!(!session_lost("tests failed"));
+    }
 
     #[test]
     fn human_needed_errors() {
