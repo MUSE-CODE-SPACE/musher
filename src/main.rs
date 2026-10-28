@@ -135,6 +135,10 @@ fn env() -> Env {
 }
 
 fn main() {
+    // `musher status | head` must end quietly like any Unix tool, not panic on a closed pipe.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = raw.first().cloned() else {
         print!("{HELP}");
