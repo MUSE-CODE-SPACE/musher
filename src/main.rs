@@ -275,7 +275,7 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
     } else {
         (String::new(), String::new())
     };
-    let id = args.get("--run-id").map(String::from).unwrap_or_else(state::new_run_id);
+    let id = args.get("--run-id").map(String::from).unwrap_or_else(|| fresh_run_id(e));
     let tasks = plan
         .tasks
         .iter()
@@ -319,6 +319,20 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
     fs::write(dir.join("plan.json"), serde_json::to_vec_pretty(plan).unwrap()).ok();
     run.event("", "started", &format!("{} tasks, parallel {}", plan.tasks.len(), plan.settings.parallel));
     Arc::new(run)
+}
+
+/// A run id that is new to this `.musher/` and to the repo's branches: two runs started in the
+/// same second (or from two worktrees of one repo) must not share `musher/<id>/*` branches.
+fn fresh_run_id(e: &Env) -> String {
+    let base = state::new_run_id();
+    let taken = |id: &str| {
+        e.home.join("runs").join(id).exists()
+            || (e.is_git && git::git(&e.root, &["branch", "--list", &format!("musher/{id}/*")]).map(|o| !o.trim().is_empty()).unwrap_or(false))
+    };
+    if !taken(&base) {
+        return base;
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|id| !taken(id)).unwrap()
 }
 
 /// Re-launch ourselves detached, writing output to the run directory.
@@ -391,7 +405,7 @@ fn cmd_run(args: &Args, raw: &[String]) -> i32 {
     }
     if args.has("--bg") {
         new_run_preflight(&e, &plan);
-        return go_background(&e, raw, &state::new_run_id());
+        return go_background(&e, raw, &fresh_run_id(&e));
     }
     let run = new_run(&e, &plan, args);
     drive(&e, plan, run, args)
@@ -455,7 +469,7 @@ fn cmd_do(args: &Args, raw: &[String]) -> i32 {
     plan.validate().unwrap_or_else(|err| die(&err));
     if args.has("--bg") {
         new_run_preflight(&e, &plan);
-        return go_background(&e, raw, &state::new_run_id());
+        return go_background(&e, raw, &fresh_run_id(&e));
     }
     let run = new_run(&e, &plan, args);
     drive(&e, plan, run, args)
