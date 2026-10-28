@@ -1187,14 +1187,19 @@ fn cmd_ask(args: &Args) -> i32 {
     if msg.trim().is_empty() {
         die("usage: musher ask <task> \"<message>\"");
     }
-    if !st.finished && pid_alive(st.pid) && t.status.is_active() {
-        die(&format!("{} is still running — wait for it or stop the run first", t.id));
+    if !st.finished && pid_alive(st.pid) {
+        // The runner (or another ask) owns this run's state; two writers would race.
+        die(&format!("run {} is still in progress (pid {}) — wait for it (`musher wait`) or `musher stop` first", st.id, st.pid));
     }
     let mut plan = load_run_plan(&dir);
     apply_overrides(&mut plan, args);
     plan.tasks.retain(|x| x.id == t.id);
     let run = Arc::new(Run::open(dir).unwrap_or_else(|err| die(&err)));
-    run.update(|s| s.pid = std::process::id());
+    run.update(|s| {
+        s.pid = std::process::id();
+        s.finished = false; // so a concurrent ask/resume sees the run as busy
+        s.ended = 0;
+    });
     run.event(&t.id, "ask", &agent::clip(&msg, 200));
     run::install_signal_handlers();
     let ctx = Arc::new(Ctx { root: e.root.clone(), home: e.home.clone(), plan, run: run.clone() });
@@ -1215,7 +1220,10 @@ fn cmd_ask(args: &Args) -> i32 {
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = worker.join();
-    run.update(|s| s.finished = true);
+    run.update(|s| {
+        s.finished = true;
+        s.ended = now();
+    });
     let snap = run.snapshot();
     if tty {
         live.draw(&snap);
