@@ -1250,6 +1250,10 @@ fn cmd_merge(args: &Args) -> i32 {
     if git::is_dirty(&e.root) {
         die("your working tree has uncommitted changes — commit or stash them first");
     }
+    let here = git::current_ref(&e.root);
+    if !st.base_ref.is_empty() && st.base_ref != "HEAD" && here != st.base_ref {
+        eprintln!("musher: note — merging into `{here}`; the run started from `{}`", st.base_ref);
+    }
     let wanted: Vec<&str> = args.pos.iter().map(String::as_str).collect();
     // Plan order is a valid topological order only if deps come first; sort to be safe.
     let mut order: Vec<&TaskState> = Vec::new();
@@ -1325,7 +1329,7 @@ fn cmd_merge(args: &Args) -> i32 {
                     eprintln!("  your branch is clean again (merge aborted). Fix the git setting, then `musher merge` again.");
                     return 1;
                 }
-                eprintln!("✗ {} conflicts with what is already merged ({files})", t.id);
+                eprintln!("✗ {} conflicts with your branch ({files})", t.id);
                 eprintln!("  your branch is clean again (merge aborted).");
                 eprintln!("  `musher merge --resolve` lets an agent integrate all finished tasks on a branch, verified by their checks, then merges that.");
                 return 1;
