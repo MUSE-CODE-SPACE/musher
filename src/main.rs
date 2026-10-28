@@ -1099,12 +1099,23 @@ fn cmd_events(args: &Args) -> i32 {
         return 0;
     }
     run::install_signal_handlers();
-    let mut seen = text.len();
+    // Follow by reading only what was appended since the last look (the log is append-only).
+    let mut pos = text.len() as u64;
+    let mut pending = String::new();
     while !run::STOP.load(Ordering::SeqCst) {
-        let t = fs::read_to_string(&path).unwrap_or_default();
-        if t.len() > seen {
-            t[seen..].lines().for_each(print_line);
-            seen = t.len();
+        let len = fs::metadata(&path).map(|m| m.len()).unwrap_or(pos);
+        if len > pos {
+            if let Ok(mut f) = fs::File::open(&path) {
+                let _ = f.seek(SeekFrom::Start(pos));
+                let mut chunk = String::new();
+                let _ = f.read_to_string(&mut chunk);
+                pos = len;
+                pending.push_str(&chunk);
+                if let Some(cut) = pending.rfind('\n') {
+                    let complete: String = pending.drain(..=cut).collect();
+                    complete.lines().for_each(print_line);
+                }
+            }
         } else if let Ok(st) = load_state(&dir) {
             // Nothing new and the runner is gone: the log is complete.
             if st.finished || !pid_alive(st.pid) {
