@@ -264,6 +264,23 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
     if plan.tasks.is_empty() {
         die("no tasks — add [[task]] entries to musher.toml (see `musher init`)");
     }
+    // Claude's "plan" mode is read-only: a task that must pass a check cannot change anything.
+    let read_only: Vec<&str> = plan
+        .tasks
+        .iter()
+        .filter(|t| {
+            t.agent.as_deref().unwrap_or(&plan.settings.agent) == "claude"
+                && t.permission.as_deref().unwrap_or(&plan.settings.permission) == "plan"
+                && t.check.is_some()
+        })
+        .map(|t| t.id.as_str())
+        .collect();
+    if !read_only.is_empty() {
+        eprintln!(
+            "musher: note — permission \"plan\" is read-only, so {} cannot edit files to satisfy its check; use acceptEdits for tasks that change code",
+            read_only.join(", ")
+        );
+    }
     let (base_commit, base_ref) = if plan.settings.isolation == "worktree" {
         if !e.is_git {
             die("worktree isolation needs a git repository (git init && git commit), or pass --no-worktree");
