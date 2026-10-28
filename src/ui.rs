@@ -280,6 +280,7 @@ mod tests {
                 note: String::new(),
                 check: None,
                 files_changed: 0,
+                pid: 0,
             }],
         };
         let lines = render(&s, 0, 80, false);
