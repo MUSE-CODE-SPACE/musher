@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn clip_strips_escapes_and_control_chars() {
-        assert_eq!(clip("a\x1b[31mred\x1b[0m b\tc\x07", 90), "ared bc");
+        assert_eq!(clip("a\x1b[31mred\x1b[0m b\tc\x07", 90), "ared b c");
         assert_eq!(clip("line1\nline2", 90), "line1 line2");
     }
 
