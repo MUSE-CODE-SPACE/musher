@@ -854,18 +854,37 @@ fn cmd_plan(args: &Args) -> i32 {
     0
 }
 
-/// The TOML part of an agent answer: a ```toml fence if there is one, else from the first [[task]].
+/// The task tables of an agent answer: inside a ``` fence if there is one, from the first
+/// `[[task]]` on. Anything the agent put before that (prose, a `[settings]` table despite the
+/// instructions) is dropped, because the user's own settings are kept.
 fn extract_toml(s: &str) -> String {
+    let mut body = s;
     if let Some(i) = s.find("```") {
         let rest = &s[i + 3..];
         let rest = rest.split_once('\n').map(|(_, r)| r).unwrap_or(rest);
         if let Some(j) = rest.find("```") {
-            return rest[..j].to_string();
+            body = &rest[..j];
         }
     }
-    match s.find("[[task]]") {
-        Some(i) => s[i..].to_string(),
+    match body.find("[[task]]") {
+        Some(i) => body[i..].to_string(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_toml;
+
+    #[test]
+    fn plan_output_shapes() {
+        let bare = "[[task]]\nid = \"a\"\nprompt = \"x\"\n";
+        assert_eq!(extract_toml(bare), bare);
+        let fenced = format!("Here is the plan:\n```toml\n[settings]\nparallel = 2\n\n{bare}```\nDone.");
+        assert_eq!(extract_toml(&fenced), bare);
+        let prose = format!("Sure.\n[settings]\nagent = \"codex\"\n{bare}");
+        assert_eq!(extract_toml(&prose), bare);
+        assert_eq!(extract_toml("no plan here"), "");
     }
 }
 
