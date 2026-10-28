@@ -219,6 +219,16 @@ fn summary_footer(s: &RunState) {
         if attention.iter().any(|t| t.status != Status::Stopped) {
             println!("  after fixing: musher resume   (re-runs only unfinished tasks)");
         }
+        let over_budget = s.tasks.iter().filter(|t| t.status == Status::Skipped && t.note == "budget reached").count();
+        if over_budget > 0 {
+            println!(
+                "{} {over_budget} task{} not started: budget reached ({} spent)",
+                paint(c, "33", "–"),
+                if over_budget == 1 { "" } else { "s" },
+                fmt_cost(s.cost())
+            );
+            println!("    {}", paint(c, "2", "raise budget_usd in musher.toml, then musher resume"));
+        }
     }
     notify(s, all_done);
 }
