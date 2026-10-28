@@ -676,6 +676,9 @@ fn cmd_report(args: &Args) -> i32 {
     };
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
     let only: Vec<&str> = args.pos.iter().map(String::as_str).filter(|p| st.task(p).is_some()).collect();
+    if let Some(bad) = args.pos.iter().find(|p| st.task(p).is_none() && **p != st.id) {
+        die(&format!("run {} has no task {bad:?} — see `musher status`", st.id));
+    }
     print!("{}", report::markdown(&dir, &st, &only));
     0
 }
@@ -700,6 +703,9 @@ fn cmd_pr(args: &Args) -> i32 {
         die("usage: musher pr <task...> | --all  [--draft] [--base main] [--remote origin]");
     }
     let remote = args.get("--remote").unwrap_or("origin");
+    if git::git(&e.root, &["remote", "get-url", remote]).is_err() {
+        die(&format!("no git remote {remote:?} — add one (`git remote add origin <url>`) or pass --remote"));
+    }
     let base = args.get("--base").map(String::from).unwrap_or_else(|| st.base_ref.clone());
     let mut code = 0;
     for id in ids {
