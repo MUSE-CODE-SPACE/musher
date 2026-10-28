@@ -775,6 +775,16 @@ fn cmd_pr(args: &Args) -> i32 {
             code = 1;
             continue;
         }
+        // Already open? The push above updated it; do not open a second one.
+        if let Ok(o) =
+            Command::new("gh").args(["pr", "list", "--head", &t.branch, "--state", "open", "--json", "url", "-q", ".[0].url"]).current_dir(&e.root).output()
+        {
+            let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if o.status.success() && !url.is_empty() {
+                println!("= {id}: already open, branch updated: {url}");
+                continue;
+            }
+        }
         let summary = fs::read_to_string(dir.join("out").join(format!("{id}.md"))).unwrap_or_default();
         let title = args.get("--title").map(String::from).unwrap_or_else(|| {
             let first = summary.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim_start_matches('#').trim()).unwrap_or("");
