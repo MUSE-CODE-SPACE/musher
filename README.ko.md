@@ -141,7 +141,7 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 | `musher merge --resolve` | `integrate` 태스크가 모든 완료 브랜치를 쌓고, 에이전트가 충돌을 해결하고, 전체 check를 통과한 뒤에만 병합 |
 | `musher pr <task…> \| --all [--draft] [--base b]` | 태스크 브랜치를 push하고 보고서와 diff stat을 본문으로 PR 생성 (`gh` 필요) |
 | `musher mem ["메모"] [--edit] [--clear]` | 모든 프롬프트에 주입되는 팀 공유 메모 |
-| `musher clean [--purge]` | worktree 정리 (`--purge`는 브랜치와 기록까지 삭제) |
+| `musher clean [--purge] [--older 7d]` | worktree 정리 (`--purge`는 브랜치와 기록까지 삭제, `--older`는 그보다 오래된 완료 런만 통째로 정리) |
 | `musher doctor` | git과 설치된 에이전트 점검 |
 | `musher completions <zsh\|bash\|fish>` | 명령·태스크 id·런 id 셸 자동완성 |
 

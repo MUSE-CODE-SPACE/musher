@@ -48,6 +48,7 @@ USAGE
   musher pr <task...|--all> [--draft] push task branches and open pull requests (needs gh)
   musher mem [note...]              show or append shared team notes (injected into prompts)
   musher clean [--purge]            remove worktrees of finished runs (--purge: branches + history)
+  musher clean --older 7d           purge finished runs older than that (worktrees, branches, history)
   musher doctor                     check git and installed agents
   musher completions <zsh|bash|fish> shell completion script
 
@@ -81,6 +82,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--base",
     "--remote",
     "--title",
+    "--older",
 ];
 
 impl Args {
@@ -1592,8 +1594,11 @@ fn cmd_mem(args: &Args) -> i32 {
 
 fn cmd_clean(args: &Args) -> i32 {
     let e = env();
-    let purge = args.has("--purge");
+    // --older <duration>: only runs that ended more than that long ago, and purge them entirely.
+    let older = args.get("--older").map(|d| plan::parse_duration(d).unwrap_or_else(|err| die(&err)));
+    let purge = args.has("--purge") || older.is_some();
     let mut n = 0;
+    let mut runs = 0;
     for dir in list_runs(&e.home) {
         let Ok(st) = load_state(&dir) else { continue };
         if !st.finished && pid_alive(st.pid) {
@@ -1604,6 +1609,13 @@ fn cmd_clean(args: &Args) -> i32 {
                 continue;
             }
         }
+        if let Some(secs) = older {
+            let ended = if st.ended > 0 { st.ended } else { st.started };
+            if now().saturating_sub(ended) < secs {
+                continue;
+            }
+        }
+        runs += 1;
         for t in &st.tasks {
             if !t.worktree.is_empty() && Path::new(&t.worktree).exists() {
                 let _ = git::git(&e.root, &["worktree", "remove", "--force", &t.worktree]);
@@ -1621,7 +1633,11 @@ fn cmd_clean(args: &Args) -> i32 {
     if e.is_git {
         let _ = git::git(&e.root, &["worktree", "prune"]);
     }
-    println!("removed {n} worktrees{}", if purge { ", branches and run history" } else { " (branches kept — `musher merge` still works)" });
+    if older.is_some() {
+        println!("purged {runs} run{} ({n} worktrees, branches and history)", if runs == 1 { "" } else { "s" });
+    } else {
+        println!("removed {n} worktrees{}", if purge { ", branches and run history" } else { " (branches kept — `musher merge` still works)" });
+    }
     0
 }
 

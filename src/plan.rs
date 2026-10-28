@@ -276,7 +276,7 @@ impl Plan {
     }
 }
 
-/// "90s", "15m", "1h30m", "45" (seconds).
+/// "90s", "15m", "1h30m", "7d", "45" (seconds).
 pub fn parse_duration(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -294,7 +294,8 @@ pub fn parse_duration(s: &str) -> Result<u64, String> {
             's' => 1,
             'm' => 60,
             'h' => 3600,
-            _ => return Err(format!("bad duration {s:?} (use s/m/h)")),
+            'd' => 86400,
+            _ => return Err(format!("bad duration {s:?} (use s/m/h/d)")),
         };
     }
     if !num.is_empty() {
@@ -348,7 +349,8 @@ mod tests {
         assert_eq!(parse_duration("90s").unwrap(), 90);
         assert_eq!(parse_duration("1h30m").unwrap(), 5400);
         assert_eq!(parse_duration("45").unwrap(), 45);
-        assert!(parse_duration("3d").is_err());
+        assert_eq!(parse_duration("3d").unwrap(), 259_200);
+        assert!(parse_duration("3w").is_err());
     }
 
     #[test]

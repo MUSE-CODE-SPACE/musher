@@ -145,7 +145,7 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 | `musher merge --resolve` | an `integrate` task stacks every finished branch, an agent resolves conflicts, all checks must pass, then that one branch is merged |
 | `musher pr <task…> \| --all [--draft] [--base b]` | push each task branch and open a pull request with the task's report and diff stat as body (needs `gh`) |
 | `musher mem ["note"] [--edit] [--clear]` | shared team notes injected into every prompt |
-| `musher clean [--purge]` | remove worktrees (`--purge` also removes branches and history) |
+| `musher clean [--purge] [--older 7d]` | remove worktrees (`--purge` also removes branches and history; `--older` purges only finished runs older than that) |
 | `musher doctor` | check git and installed agents |
 | `musher completions <zsh\|bash\|fish>` | shell completion for commands, task ids and run ids |
 
