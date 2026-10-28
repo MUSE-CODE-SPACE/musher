@@ -160,6 +160,20 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 
 Hooks never block the run: musher waits up to 10 s, a slower hook keeps running on its own, and its output goes to `.musher/runs/<id>/hooks.log`. A failing hook is an event, not an error.
 
+### Common flags
+
+| | |
+|---|---|
+| `-f <file>` | plan file (default `musher.toml` at the repo root) |
+| `--run <id>` | act on a specific run instead of the latest (`musher ls` lists them) |
+| `--bg` / `--no-ui` / `--json` | background run · plain line output · final state as JSON on stdout |
+| `--no-notify` | no desktop notification when the run ends |
+| `--no-worktree` | run in the repo itself (`isolation = "none"`) |
+| `-j N` / `--timeout 20m` / `--retries 1` | override the plan's parallelism, per-attempt timeout, fix attempts |
+| `--agent`, `--model`, `--permission`, `--check`, `--id` | per-task settings for `musher do` (`--model` also for `plan`) |
+| `--run-id <id>` | choose the run id yourself (otherwise `YYMMDD-HHMMSS`) |
+| `--base`, `--remote`, `--title`, `--draft` | for `musher pr` |
+
 ### Let an agent be the lead
 
 Every command is scriptable, and status is available as JSON. A "lead" agent can therefore fan out work on its own:

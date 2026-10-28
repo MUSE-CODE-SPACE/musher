@@ -156,6 +156,20 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 
 훅은 런을 막지 않습니다. 최대 10초만 기다리고 느린 훅은 따로 계속 돌며, 출력은 `.musher/runs/<id>/hooks.log`에 남습니다. 훅 실패는 이벤트로 기록될 뿐 런을 실패시키지 않습니다.
 
+### 공통 플래그
+
+| | |
+|---|---|
+| `-f <파일>` | 플랜 파일 (기본은 저장소 루트의 `musher.toml`) |
+| `--run <id>` | 최신 런 대신 특정 런을 대상으로 (`musher ls`로 확인) |
+| `--bg` / `--no-ui` / `--json` | 백그라운드 실행 · 줄 단위 출력 · 최종 상태를 stdout에 JSON으로 |
+| `--no-notify` | 런 종료 시 데스크톱 알림 끄기 |
+| `--no-worktree` | 저장소 안에서 직접 실행 (`isolation = "none"`) |
+| `-j N` / `--timeout 20m` / `--retries 1` | 플랜의 동시 실행 수·시도당 제한 시간·수정 시도 횟수 덮어쓰기 |
+| `--agent`, `--model`, `--permission`, `--check`, `--id` | `musher do`의 태스크 설정 (`--model`은 `plan`에도) |
+| `--run-id <id>` | 런 id 직접 지정 (기본은 `YYMMDD-HHMMSS`) |
+| `--base`, `--remote`, `--title`, `--draft` | `musher pr`용 |
+
 ### 에이전트를 리더로 쓰기
 
 모든 명령은 스크립트로 호출할 수 있고, 상태는 JSON으로 받을 수 있습니다. 그래서 "리더" 에이전트가 직접 작업을 나눠 맡길 수 있습니다.
