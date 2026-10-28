@@ -31,6 +31,37 @@ pub fn term_width() -> usize {
 /// The dashboard redraws in place with cursor-up, which breaks once it is taller than the
 /// terminal. Then collapse the quiet rows: finished tasks become one line, queued ones another,
 /// and everything active or needing attention stays visible.
+/// Cut a line to `width` visible characters, ignoring ANSI escape sequences, so a redraw
+/// never wraps (a wrapped line breaks the cursor-up arithmetic of the live dashboard).
+pub fn clip_visible(line: &str, width: usize) -> String {
+    let mut out = String::with_capacity(line.len());
+    let (mut seen, mut in_esc, mut cut) = (0usize, false, false);
+    for ch in line.chars() {
+        if in_esc {
+            out.push(ch);
+            if ch.is_ascii_alphabetic() {
+                in_esc = false;
+            }
+            continue;
+        }
+        if ch == '\x1b' {
+            in_esc = true;
+            out.push(ch);
+            continue;
+        }
+        if seen >= width {
+            cut = true;
+            continue;
+        }
+        out.push(ch);
+        seen += 1;
+    }
+    if cut && line.contains('\x1b') {
+        out.push_str("\x1b[0m");
+    }
+    out
+}
+
 pub fn fit_height(s: &RunState, mut lines: Vec<String>, rows: usize, c: bool) -> Vec<String> {
     if lines.len() < rows {
         return lines;
@@ -109,7 +140,8 @@ pub fn render(s: &RunState, frame: usize, width: usize, c: bool) -> Vec<String> 
     if s.finished {
         head += "  (finished)";
     }
-    let idw = s.tasks.iter().map(|t| t.id.chars().count()).max().unwrap_or(4).clamp(4, 24);
+    // Name column: up to 24 chars, less on a narrow terminal so the fixed columns still fit.
+    let idw = s.tasks.iter().map(|t| t.id.chars().count()).max().unwrap_or(4).clamp(4, 24).min(width.saturating_sub(34).max(6));
     let mut out = vec![head];
     for t in &s.tasks {
         let (g, col) = glyph(t.status, frame);
@@ -162,6 +194,8 @@ impl Live {
         if self.hint && !s.finished {
             lines.push(paint(c, "2", " Ctrl-C stops (resume later) · other terminal: musher watch · musher logs <task> -f"));
         }
+        // Never let a line wrap: the terminal would add rows the cursor-up below does not know about.
+        let lines: Vec<String> = lines.iter().map(|l| clip_visible(l, w.saturating_sub(1))).collect();
         self.frame += 1;
         let mut buf = String::new();
         if self.drawn > 0 {
@@ -322,6 +356,14 @@ impl Observer for Quiet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_keeps_escapes_and_counts_visible_chars() {
+        assert_eq!(clip_visible("abcdef", 3), "abc");
+        assert_eq!(clip_visible("\x1b[31mabcdef\x1b[0m", 3), "\x1b[31mabc\x1b[0m\x1b[0m");
+        assert_eq!(clip_visible("한글abc", 4), "한글ab");
+        assert_eq!(clip_visible("short", 10), "short");
+    }
 
     #[test]
     fn renders_without_color() {
