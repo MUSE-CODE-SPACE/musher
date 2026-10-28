@@ -126,7 +126,7 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 |---|---|
 | `musher run [-j N] [--only a,b] [--dry-run] [--bg]` | 계획 실행 (`--only`는 의존 태스크도 함께 포함) |
 | `musher do "<프롬프트>" [--agent] [--check] [--id] [--model] [--bg]` | 일회성 태스크 |
-| `musher plan "<목표>" [--out f] [--print] [--force]` | 에이전트가 저장소를 읽고 `musher.toml`을 작성: check와 의존성을 갖춘 2~6개 태스크. 기존 `[settings]`는 유지 |
+| `musher plan "<목표>" [--out f] [--print] [--force] [--model m]` | 에이전트가 저장소를 읽고 `musher.toml`을 작성: check와 의존성을 갖춘 2~6개 태스크. 기존 `[settings]`는 유지. `--model`은 계획 작성과 생성된 모든 태스크에 적용 |
 | `musher resume [run]` | 중단·실패한 런 이어서 실행 |
 | `musher stop [run]` | 백그라운드 런 중단. 에이전트는 종료되고 완료분은 유지 |
 | `musher watch` / `status [--json]` / `wait` / `ls [--json]` | 어디서든 관찰. `wait`는 전부 done일 때만 exit 0 |

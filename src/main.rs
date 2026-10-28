@@ -29,7 +29,7 @@ USAGE
   musher do \"<prompt>\" [opts]       one-off task: --agent, --check, --id, --retries
   musher resume [run]               continue a stopped or failed run (done tasks are kept)
   musher stop [run]                 stop a background run (agents are terminated, work is kept)
-  musher plan \"<goal>\" [--out f]     let an agent split a goal into a musher.toml task graph
+  musher plan \"<goal>\" [--out f]     let an agent split a goal into a musher.toml task graph (--model: for planning and the tasks)
 
   musher watch [run]                live dashboard from any terminal
   musher status [run] [--json]      snapshot of a run
@@ -890,7 +890,12 @@ fn cmd_plan(args: &Args) -> i32 {
     if result.is_empty() {
         result = if spec.raw { text.to_string() } else { last };
     }
-    let toml = extract_toml(&result);
+    let mut toml = extract_toml(&result);
+    // --model names the model for planning *and* for the tasks it writes.
+    if let Some(m) = args.get("--model") {
+        toml =
+            toml.lines().map(|l| if l.trim() == "[[task]]" { format!("[[task]]\nmodel = {m:?}") } else { l.to_string() }).collect::<Vec<_>>().join("\n") + "\n";
+    }
     if toml.trim().is_empty() {
         die(&format!("the agent returned no plan (exit {}): {}", o.status.code().unwrap_or(-1), agent::clip(&String::from_utf8_lossy(&o.stderr), 200)));
     }
