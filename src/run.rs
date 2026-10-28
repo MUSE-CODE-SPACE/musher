@@ -223,7 +223,9 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
     let model = task.model.clone().unwrap_or_else(|| spec.model.clone());
     let mut allow: Vec<String> = ctx.plan.settings.allow.iter().chain(task.allow.iter()).cloned().collect();
     if let Some(c) = &task.check {
+        // Exact match, plus anything that starts with it: agents like to append `&& echo OK`.
         allow.push(format!("Bash({c})"));
+        allow.push(format!("Bash({c}:*)"));
     }
     let allow = allow.join(",");
     let inv = Invoke { permission: permission.clone(), model: model.clone(), allow: allow.clone(), timeout };
@@ -498,7 +500,7 @@ fn build_prompt(ctx: &Ctx, task: &Task) -> String {
     }
     if let Some(c) = &task.check {
         p.push_str(&format!(
-            "- When you finish, musher verifies your work by running `{c}` (it must exit 0). You may run it yourself; if it fails afterwards, you get the output and another turn.\n"
+            "- When you finish, musher verifies your work by running `{c}` (it must exit 0). You may run it yourself without asking, but only as that exact command: nothing appended (no `&& echo`, no `; echo $?`), or it will be blocked. If it fails afterwards, you get the output and another turn.\n"
         ));
     }
     p.push_str("- Finish the task fully, then reply with a short summary of what you changed and anything a follow-up task must know.\n");
