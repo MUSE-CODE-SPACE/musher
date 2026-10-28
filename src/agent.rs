@@ -213,8 +213,25 @@ fn short_path(p: &str) -> String {
     }
 }
 
+/// One line, at most `max` chars, with control characters and ANSI escape sequences removed
+/// (agent error strings can carry colour codes that would repaint the dashboard).
 pub fn clip(s: &str, max: usize) -> String {
-    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut plain = String::with_capacity(s.len());
+    let mut in_esc = false;
+    for ch in s.chars() {
+        if in_esc {
+            if ch.is_ascii_alphabetic() {
+                in_esc = false;
+            }
+            continue;
+        }
+        match ch {
+            '\x1b' => in_esc = true,
+            c if c.is_control() && !c.is_whitespace() => {}
+            c => plain.push(c),
+        }
+    }
+    let one_line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
     if one_line.chars().count() <= max {
         one_line
     } else {
@@ -286,6 +303,12 @@ mod tests {
         let e = parse_line(r#"{"type":"result","status":"error","error":{"type":"ApiError","message":"quota"}}"#);
         assert!(e.is_error && e.text.as_deref() == Some("quota"));
         assert!(!parse_line(r#"{"type":"error","severity":"warning","message":"meh"}"#).is_error);
+    }
+
+    #[test]
+    fn clip_strips_escapes_and_control_chars() {
+        assert_eq!(clip("a\x1b[31mred\x1b[0m b\tc\x07", 90), "ared bc");
+        assert_eq!(clip("line1\nline2", 90), "line1 line2");
     }
 
     #[test]
