@@ -845,10 +845,11 @@ fn cmd_pr(args: &Args) -> i32 {
         let summary = fs::read_to_string(dir.join("out").join(format!("{id}.md"))).unwrap_or_default();
         let title = args.get("--title").map(String::from).unwrap_or_else(|| {
             let first = summary.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim_start_matches('#').trim()).unwrap_or("");
-            if first.is_empty() || first.len() > 72 {
+            if first.is_empty() {
                 format!("musher: {id}")
             } else {
-                format!("{id}: {first}")
+                // Character count, not bytes: a Korean summary is 3 bytes per character.
+                format!("{id}: {}", agent::clip(first, 72))
             }
         });
         let stat = git::git(&e.root, &["diff", "--stat", &format!("{}..{}", if t.start.is_empty() { &st.base_commit } else { &t.start }, t.branch)])
