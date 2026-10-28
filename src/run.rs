@@ -134,7 +134,7 @@ pub fn execute(ctx: Arc<Ctx>, ui: &mut dyn Observer) -> bool {
         let done = snap.tasks.iter().filter(|t| t.status == Status::Done).count();
         let env = vec![
             ("MUSHER_RUN", snap.id.clone()),
-            ("MUSHER_STATUS", crate::report::run_outcome(&snap).to_string()),
+            ("MUSHER_STATUS", if STOP.load(Ordering::SeqCst) { "stopped".to_string() } else { crate::report::run_outcome(&snap).to_string() }),
             ("MUSHER_COST", format!("{:.2}", snap.cost())),
             ("MUSHER_DONE", done.to_string()),
             ("MUSHER_TOTAL", snap.tasks.len().to_string()),

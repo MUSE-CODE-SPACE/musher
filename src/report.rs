@@ -6,10 +6,12 @@ use crate::state::{fmt_cost, fmt_dur, now, RunState, Status, TaskState};
 use std::fs;
 use std::path::Path;
 
+/// "done" when every task is done; "stopped" when the only unfinished tasks were interrupted
+/// (so a resume will simply continue); otherwise "incomplete" (something failed or was blocked).
 pub fn run_outcome(s: &RunState) -> &'static str {
     if s.tasks.iter().all(|t| t.status == Status::Done) {
         "done"
-    } else if s.tasks.iter().any(|t| t.status == Status::Stopped) {
+    } else if s.tasks.iter().all(|t| matches!(t.status, Status::Done | Status::Stopped | Status::Queued)) {
         "stopped"
     } else {
         "incomplete"
