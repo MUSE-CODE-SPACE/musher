@@ -421,6 +421,16 @@ fn needs_human(err: &str) -> bool {
 /// `musher check <task>`: after hand edits in the worktree, commit them and re-run the check
 /// without calling the agent. Returns true when the task is done.
 pub fn recheck(ctx: &Ctx, id: &str) -> bool {
+    let (ok, ran) = recheck_inner(ctx, id);
+    // A check actually ran: tell the on_task hook, like any other attempt.
+    if ran {
+        task_hook(ctx, id);
+    }
+    ok
+}
+
+/// Returns (task is done, a check/commit actually happened).
+fn recheck_inner(ctx: &Ctx, id: &str) -> (bool, bool) {
     let task = ctx.plan.task(id).expect("task in plan").clone();
     let run = &ctx.run;
     let mut log = Log::open(&run.log_path(id));
@@ -430,7 +440,7 @@ pub fn recheck(ctx: &Ctx, id: &str) -> bool {
     if snap.isolation == "worktree" && !cwd.join(".git").exists() {
         // Nothing to check against; leave the task's status as it is.
         eprintln!("musher: {id}'s worktree is gone (musher clean?) — `musher resume` or `musher ask {id} \"…\"` recreates it from its branch");
-        return false;
+        return (false, false);
     }
     let base = if t.start.is_empty() { snap.base_commit.clone() } else { t.start.clone() };
     log.section("check (manual, no agent)");
@@ -440,14 +450,14 @@ pub fn recheck(ctx: &Ctx, id: &str) -> bool {
             Ok(false) => {}
             Err(e) => {
                 run.set_status(id, Status::Failed, &agent::clip(&format!("could not commit: {e}"), 120));
-                return false;
+                return (false, true);
             }
         }
     }
     let summary = fs::read_to_string(run.out_path(id)).unwrap_or_default();
     let Some(check) = task.check.as_deref() else {
         finish_done(ctx, id, &cwd, &base, &summary, &[]);
-        return true;
+        return (true, true);
     };
     run.set_status(id, Status::Checking, "");
     let timeout = Duration::from_secs(parse_duration(task.timeout.as_deref().unwrap_or(&ctx.plan.settings.timeout)).unwrap_or(1800));
@@ -458,7 +468,7 @@ pub fn recheck(ctx: &Ctx, id: &str) -> bool {
     } else {
         run.set_status(id, Status::Failed, &format!("check failed (exit {code}) — manual check"));
     }
-    passed
+    (passed, true)
 }
 
 fn finish_done(ctx: &Ctx, id: &str, cwd: &Path, base: &str, summary: &str, denied: &[String]) {
