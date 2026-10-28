@@ -165,9 +165,9 @@ pub fn builtin_agents() -> BTreeMap<String, AgentSpec> {
     m.insert(
         "gemini".into(),
         AgentSpec {
-            cmd: v(&["gemini", "-p", "{prompt}", "--output-format", "stream-json", "--yolo", "{model:-m}"]),
-            resume: vec![],
-            attach: v(&["gemini"]),
+            cmd: v(&["gemini", "-p", "{prompt}", "--session-id", "{session}", "--output-format", "stream-json", "--yolo", "{model:-m}"]),
+            resume: v(&["gemini", "-p", "{prompt}", "--resume", "{session}", "--output-format", "stream-json", "--yolo", "{model:-m}"]),
+            attach: v(&["gemini", "--resume", "{session}"]),
             model: String::new(),
             raw: false,
         },

@@ -77,6 +77,8 @@ pub struct Signal {
     pub is_error: bool,
     /// The agent wanted to do something it was not permitted to.
     pub denied: Vec<String>,
+    /// `text` is a streaming chunk to append, not a whole message (Gemini `delta`).
+    pub text_delta: bool,
 }
 
 pub fn parse_line(line: &str) -> Signal {
@@ -105,6 +107,14 @@ pub fn parse_line(line: &str) -> Signal {
                     Some("tool_use") => s.activity = Some(describe_tool(c)),
                     _ => {}
                 }
+            }
+        }
+        "result" if v.get("status").is_some() && v.get("total_cost_usd").is_none() => {
+            // Gemini
+            s.tokens = usage_tokens(v.get("stats"));
+            if v.get("status").and_then(Value::as_str) == Some("error") {
+                s.is_error = true;
+                s.text = v.pointer("/error/message").and_then(Value::as_str).map(String::from);
             }
         }
         "result" => {
@@ -144,12 +154,23 @@ pub fn parse_line(line: &str) -> Signal {
             }
         }
         "turn.completed" => s.tokens = usage_tokens(v.get("usage")),
+        // Gemini: non-fatal warnings share the "error" type; only severity=error counts.
+        "error" if v.get("severity").is_some() => {
+            if v.get("severity").and_then(Value::as_str) == Some("error") {
+                s.is_error = true;
+                s.text = str_at(&v, &["message"]);
+            }
+        }
         "turn.failed" | "error" => {
             s.is_error = true;
             s.text = str_at(&v, &["message"]).or_else(|| v.pointer("/error/message").and_then(Value::as_str).map(String::from));
         }
-        // Gemini CLI stream-json
-        "message" if v.get("role").and_then(Value::as_str) == Some("assistant") => s.text = str_at(&v, &["content"]),
+        // Gemini CLI stream-json: init{session_id} message{role,content,delta} tool_use{tool_name,parameters}
+        // error{severity,message} result{status,error,stats}
+        "message" if v.get("role").and_then(Value::as_str) == Some("assistant") => {
+            s.text = str_at(&v, &["content"]);
+            s.text_delta = v.get("delta").and_then(Value::as_bool).unwrap_or(false);
+        }
         "tool_use" => s.activity = Some(describe_tool(&v)),
         _ => {}
     }
@@ -250,6 +271,21 @@ mod tests {
         assert_eq!(cmd.activity.as_deref(), Some("$ cargo test"));
         let msg = parse_line(r#"{"type":"item.completed","item":{"type":"agent_message","text":"All green."}}"#);
         assert_eq!(msg.result.as_deref(), Some("All green."));
+    }
+
+    #[test]
+    fn gemini_stream() {
+        assert_eq!(parse_line(r#"{"type":"init","session_id":"g-1","model":"gemini-2.5-pro"}"#).session.as_deref(), Some("g-1"));
+        let d = parse_line(r#"{"type":"message","role":"assistant","content":"Hel","delta":true}"#);
+        assert!(d.text_delta && d.text.as_deref() == Some("Hel"));
+        let t = parse_line(r#"{"type":"tool_use","tool_name":"write_file","tool_id":"1","parameters":{"file_path":"/r/src/a.rs"}}"#);
+        assert_eq!(t.activity.as_deref(), Some("write_file src/a.rs"));
+        let r = parse_line(r#"{"type":"result","status":"success","stats":{"total_tokens":30,"input_tokens":20,"output_tokens":10,"cached":0,"input":20}}"#);
+        assert_eq!(r.tokens, Some(30));
+        assert!(!r.is_error);
+        let e = parse_line(r#"{"type":"result","status":"error","error":{"type":"ApiError","message":"quota"}}"#);
+        assert!(e.is_error && e.text.as_deref() == Some("quota"));
+        assert!(!parse_line(r#"{"type":"error","severity":"warning","message":"meh"}"#).is_error);
     }
 
     #[test]

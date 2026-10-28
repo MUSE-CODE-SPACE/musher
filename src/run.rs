@@ -410,7 +410,7 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
 fn session_lost(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     (e.contains("session") || e.contains("conversation") || e.contains("thread"))
-        && (e.contains("not found") || e.contains("no conversation") || e.contains("does not exist") || e.contains("unknown"))
+        && (e.contains("not found") || e.contains("no conversation") || e.contains("does not exist") || e.contains("unknown") || e.contains("invalid session"))
 }
 
 /// Errors no retry can fix: the account, not the code, is the problem.
@@ -731,7 +731,11 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
                 summary = r;
             }
             if let Some(t) = &s.text {
-                text = t.clone();
+                if s.text_delta {
+                    text.push_str(t);
+                } else {
+                    text = t.clone();
+                }
             }
             if s.is_error {
                 is_error = true;
