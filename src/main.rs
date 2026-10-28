@@ -283,10 +283,8 @@ fn select_tasks(p: &mut Plan, only: &str, no_deps: bool) {
     }
 }
 
-fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
-    if plan.tasks.is_empty() {
-        die("no tasks — add [[task]] entries to musher.toml (see `musher init`)");
-    }
+/// Permission modes worth a word before anything runs (printed by run, do and --bg alike).
+fn warn_plan(plan: &Plan) {
     // Claude's "plan" mode is read-only: a task that must pass a check cannot change anything.
     let read_only: Vec<&str> = plan
         .tasks
@@ -321,6 +319,13 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
             if bypass.len() == 1 { "s" } else { "" }
         );
     }
+}
+
+fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
+    if plan.tasks.is_empty() {
+        die("no tasks — add [[task]] entries to musher.toml (see `musher init`)");
+    }
+    warn_plan(plan);
     let (base_commit, base_ref) = if plan.settings.isolation == "worktree" {
         if !e.is_git {
             die("worktree isolation needs a git repository (git init && git commit), or pass --no-worktree");
@@ -483,6 +488,7 @@ fn new_run_preflight(e: &Env, plan: &Plan) {
     if plan.tasks.is_empty() {
         die("no tasks — add [[task]] entries to musher.toml");
     }
+    warn_plan(plan);
     if plan.settings.isolation == "worktree" {
         if !e.is_git {
             die("worktree isolation needs a git repository, or pass --no-worktree");
