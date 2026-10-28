@@ -297,6 +297,7 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
             note: String::new(),
             check: None,
             files_changed: 0,
+            pid: 0,
         })
         .collect();
     let st = RunState {
@@ -535,10 +536,16 @@ fn cmd_resume(args: &Args, raw: &[String]) -> i32 {
     apply_overrides(&mut plan, args);
     fs::write(dir.join("plan.json"), serde_json::to_vec_pretty(&plan).unwrap()).ok();
     let run = Arc::new(Run::open(dir).unwrap_or_else(|err| die(&err)));
+    // Agents left behind by a crashed runner would race the new attempt in the same worktree.
+    for t in st.tasks.iter().filter(|t| t.status != Status::Done && t.pid != 0 && pid_alive(t.pid)) {
+        eprintln!("musher: stopping the previous agent of {} (pid {})", t.id, t.pid);
+        run::kill_group(t.pid);
+    }
     run.update(|s| {
         s.finished = false;
         s.ended = 0;
         for t in s.tasks.iter_mut().filter(|t| t.status != Status::Done) {
+            t.pid = 0;
             t.status = Status::Queued;
             t.note.clear();
             t.activity.clear();
@@ -1375,6 +1382,7 @@ fn merge_resolve(e: &Env, args: &Args, dir: &Path) -> i32 {
             note: String::new(),
             check: None,
             files_changed: 0,
+            pid: 0,
         });
     });
     run.event(&id, "integrate", &done.join(", "));

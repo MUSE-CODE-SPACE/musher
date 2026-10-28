@@ -577,7 +577,7 @@ fn reap(pid: u32) {
     CHILDREN.lock().unwrap().retain(|p| *p != pid as i32);
 }
 
-fn kill_group(pid: u32) {
+pub fn kill_group(pid: u32) {
     unsafe {
         libc::kill(-(pid as i32), libc::SIGTERM);
     }
@@ -601,6 +601,7 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
         }
     };
     let pid = child.id();
+    run.task(id, |t| t.pid = pid);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let shared_log = log.share();
@@ -676,6 +677,7 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
         thread::sleep(Duration::from_millis(150));
     };
     reap(pid);
+    run.task(id, |t| t.pid = 0);
     let (summary, mut error, denied, is_error) = out_thread.join().unwrap_or_default();
     let err_tail = err_thread.join().unwrap_or_default();
     let code = status.and_then(|s| s.code()).unwrap_or(-1);

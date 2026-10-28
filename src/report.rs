@@ -112,6 +112,7 @@ mod tests {
             note: "a | b".into(),
             check: Some(st == Status::Done),
             files_changed: 2,
+            pid: 0,
         };
         let s = RunState {
             id: "r".into(),

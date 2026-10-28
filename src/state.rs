@@ -82,6 +82,10 @@ pub struct TaskState {
     pub check: Option<bool>,
     #[serde(default)]
     pub files_changed: u32,
+    /// Process group of the agent currently running for this task (0 when none), so a
+    /// resume after a crashed runner can clean up what it left behind.
+    #[serde(default)]
+    pub pid: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
