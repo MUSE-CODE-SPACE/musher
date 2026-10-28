@@ -113,6 +113,14 @@ impl Args {
     }
 }
 
+/// `println!` that survives a closed stdout: commands that change git state (merge, pr)
+/// must finish their work even when piped into `head` or `grep -q`.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
 fn die(msg: &str) -> ! {
     eprintln!("musher: {msg}");
     exit(2)
@@ -769,6 +777,9 @@ fn cmd_report(args: &Args) -> i32 {
 
 /// Push finished task branches and open a pull request for each, body = that task's report.
 fn cmd_pr(args: &Args) -> i32 {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN); // finish every branch even if the reader went away
+    }
     let e = env();
     let dir = find_run(&e, args);
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
@@ -819,7 +830,7 @@ fn cmd_pr(args: &Args) -> i32 {
         {
             let url = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if o.status.success() && !url.is_empty() {
-                println!("= {id}: already open, branch updated: {url}");
+                say!("= {id}: already open, branch updated: {url}");
                 continue;
             }
         }
@@ -857,7 +868,7 @@ fn cmd_pr(args: &Args) -> i32 {
             c.arg("--draft");
         }
         match c.output() {
-            Ok(o) if o.status.success() => println!("✓ {id}: {}", String::from_utf8_lossy(&o.stdout).trim()),
+            Ok(o) if o.status.success() => say!("✓ {id}: {}", String::from_utf8_lossy(&o.stdout).trim()),
             Ok(o) => {
                 eprintln!("✗ {id}: {}", String::from_utf8_lossy(&o.stderr).trim());
                 code = 1;
@@ -1315,6 +1326,9 @@ fn cmd_check(args: &Args) -> i32 {
 }
 
 fn cmd_merge(args: &Args) -> i32 {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN); // finish every branch even if the reader went away
+    }
     let e = env();
     let dir = find_run(&e, args);
     if args.has("--resolve") {
@@ -1367,7 +1381,7 @@ fn cmd_merge(args: &Args) -> i32 {
             continue;
         }
         if git::git(&e.root, &["rev-list", "--count", &format!("{}..{}", st.base_commit, t.branch)]).map(|n| n.trim() == "0").unwrap_or(false) {
-            println!("= {} made no commits", t.id);
+            say!("= {} made no commits", t.id);
             continue;
         }
         candidates.push(t);
@@ -1384,7 +1398,7 @@ fn cmd_merge(args: &Args) -> i32 {
         }
         let ahead = git::git(&e.root, &["rev-list", "--count", &format!("HEAD..{}", t.branch)]).unwrap_or_default();
         if ahead.trim() == "0" {
-            println!("= {} already merged", t.id);
+            say!("= {} already merged", t.id);
             continue;
         }
         let msg = format!("Merge musher task {} (run {})", t.id, st.id);
@@ -1396,7 +1410,7 @@ fn cmd_merge(args: &Args) -> i32 {
                     .filter(|x| candidates.iter().any(|c| c.id == *x && git::git(&e.root, &["merge-base", "--is-ancestor", &c.branch, &t.branch]).is_ok()))
                     .collect();
                 let with = if carried.is_empty() { String::new() } else { format!(" (includes {})", carried.join(", ")) };
-                println!("✓ merged {}{with}", t.id);
+                say!("✓ merged {}{with}", t.id);
                 merged += 1;
             }
             Err(err) => {
@@ -1417,7 +1431,7 @@ fn cmd_merge(args: &Args) -> i32 {
         }
     }
     if merged == 0 {
-        println!("nothing to merge");
+        say!("nothing to merge");
     }
     0
 }
@@ -1517,7 +1531,7 @@ fn merge_resolve(e: &Env, args: &Args, dir: &Path) -> i32 {
     let msg = format!("Merge musher tasks {} (run {}, integrated)", done.join(", "), st.id);
     match git::git(&e.root, &["merge", "--no-ff", "-m", &msg, &t.branch]) {
         Ok(_) => {
-            println!("✓ merged {} via {id}", done.join(", "));
+            say!("✓ merged {} via {id}", done.join(", "));
             0
         }
         Err(err) => {

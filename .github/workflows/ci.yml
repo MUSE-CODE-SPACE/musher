@@ -16,3 +16,5 @@ jobs:
           git config --global user.name ci
           git config --global user.email ci@localhost
           MUSHER=$PWD/target/release/musher sh examples/demo/run-demo.sh
+      - name: lifecycle regression (stop/resume/check/hooks/merge/clean)
+        run: MUSHER=$PWD/target/release/musher sh tests/regression.sh
