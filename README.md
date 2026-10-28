@@ -180,7 +180,7 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 | Core idea | Multiplex interactive agent terminals | Run a graph of agent tasks to a verified result |
 | Runtime model | Background server owns the PTYs | No server: a run is a process plus files in `.musher/` |
 | Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (755 KB, measured) |
-| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **3.1 MB RSS** (8 agents, measured) |
+| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **3.0 MB RSS** (8 agents, measured) |
 | Idle cost | Server process stays resident | **Nothing runs** between runs |
 | Agent state | Process name + **screen-pattern manifests**; new prompts "may initially show as `idle` instead of `blocked`"² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
 | Isolation between agents | Worktree workspaces **on request** (`herdr worktree create`); by default panes share one checkout | **Worktree + branch per task**, automatic, stacked by dependency |
@@ -204,7 +204,7 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 
 ## Design notes
 
-* **Small on purpose.** About 3.5k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
+* **Small on purpose.** About 4k lines of Rust with three dependencies (`serde`, `serde_json`, `toml`) plus `libc`. There is no async runtime and no TUI framework.
 * **Files are the API.** `.musher/runs/<id>/state.json` is rewritten atomically, `events.jsonl` is append-only, and `logs/` and `out/` hold plain text. Anything can read them.
 * **Safe defaults.** The default permission mode is `acceptEdits`. Agents never push. `.musher/` is hidden through `.git/info/exclude`, so your `.gitignore` is never touched. Ctrl-C terminates whole agent process groups, so no orphan processes are left behind.
 * **Platforms:** macOS and Linux. Windows is untested (WSL should work).

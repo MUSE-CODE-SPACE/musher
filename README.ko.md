@@ -176,7 +176,7 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 | 핵심 개념 | 대화형 에이전트 터미널 다중화 | 에이전트 태스크 그래프를 검증된 결과까지 실행 |
 | 실행 모델 | 백그라운드 서버가 PTY 소유 | 서버 없음: 런 = 프로세스 + `.musher/` 파일 |
 | 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.7 MB** (755 KB 실측) |
-| 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 3.1 MB** (에이전트 8개, 실측) |
+| 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 3.0 MB** (에이전트 8개, 실측) |
 | 유휴 비용 | 서버 상주 | **아무것도 안 돎** |
 | 상태 판정 | 프로세스명 + **화면 패턴 매니페스트**. 새로운 프롬프트는 "처음에 `blocked` 대신 `idle`로 보일 수 있음"² | 에이전트의 **구조화 이벤트**(세션 id, 도구, 비용, 최종 답, 권한 거부) + 종료 코드 |
 | 에이전트 간 격리 | `herdr worktree create`로 **직접 만들면** 가능. 기본은 패널들이 체크아웃 하나를 공유 | 태스크별 **worktree + 브랜치** 자동, 의존성대로 쌓음 |
@@ -199,7 +199,7 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 
 ## 설계 원칙
 
-* **일부러 작게.** Rust 약 3.5k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
+* **일부러 작게.** Rust 약 4k줄, 의존성은 `serde`, `serde_json`, `toml`, `libc`뿐입니다. async 런타임도 TUI 프레임워크도 쓰지 않습니다.
 * **파일이 곧 API.** `state.json`은 원자적으로 교체되고, `events.jsonl`은 추가만 하며, `logs/`와 `out/`은 평문입니다. 어떤 도구로든 읽을 수 있습니다.
 * **안전한 기본값.** 기본 권한은 `acceptEdits`이고, 에이전트는 절대 push하지 않습니다. `.musher/`는 `.git/info/exclude`로 숨기므로 `.gitignore`를 건드리지 않습니다. Ctrl-C를 누르면 에이전트 프로세스 그룹 전체를 종료하므로 고아 프로세스가 남지 않습니다.
 * **지원 플랫폼:** macOS, Linux. Windows는 미검증입니다(WSL 권장).
