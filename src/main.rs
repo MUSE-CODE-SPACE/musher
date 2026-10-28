@@ -205,7 +205,7 @@ fn cmd_init() -> i32 {
     if path.exists() {
         println!("musher.toml already exists — leaving it alone");
     } else {
-        fs::write(&path, plan::TEMPLATE).unwrap_or_else(|err| die(&err.to_string()));
+        fs::write(&path, plan::TEMPLATE).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", path.display())));
         println!("wrote {}", path.display());
     }
     fs::create_dir_all(&e.home).ok();
@@ -384,8 +384,8 @@ fn fresh_run_id(e: &Env) -> String {
 /// Re-launch ourselves detached, writing output to the run directory.
 fn go_background(e: &Env, raw: &[String], run_id: &str) -> i32 {
     let dir = e.home.join("runs").join(run_id);
-    fs::create_dir_all(&dir).unwrap_or_else(|err| die(&err.to_string()));
-    let out = fs::File::create(dir.join("musher.out")).unwrap_or_else(|err| die(&err.to_string()));
+    fs::create_dir_all(&dir).unwrap_or_else(|err| die(&format!("cannot create {}: {err}", dir.display())));
+    let out = fs::File::create(dir.join("musher.out")).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", dir.join("musher.out").display())));
     let mut argv: Vec<String> = raw.iter().filter(|a| *a != "--bg").cloned().collect();
     argv.push("--no-ui".into());
     if !raw.iter().any(|a| a == "--run-id") && raw[0] != "resume" {
@@ -870,7 +870,7 @@ fn cmd_pr(args: &Args) -> i32 {
         }
         body.push_str(&format!("\n---\nOpened by [musher](https://github.com/MUSE-CODE-SPACE/musher) run `{}`.\n", st.id));
         let body_path = dir.join(format!("pr-{id}.md"));
-        fs::write(&body_path, &body).unwrap_or_else(|err| die(&err.to_string()));
+        fs::write(&body_path, &body).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", body_path.display())));
         let mut c = Command::new("gh");
         c.arg("pr")
             .arg("create")
@@ -991,7 +991,7 @@ fn cmd_plan(args: &Args) -> i32 {
         file.push('\n');
     }
     Plan::parse(&file).unwrap_or_else(|err| die(&format!("internal: generated file is invalid: {err}")));
-    fs::write(&out, &file).unwrap_or_else(|err| die(&err.to_string()));
+    fs::write(&out, &file).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", out.display())));
     println!("wrote {} ({} tasks)\n", out.display(), proposed.tasks.len());
     dry_run(&proposed);
     println!("\nedit as you like, then `musher run`");
@@ -1600,7 +1600,7 @@ fn cmd_mem(args: &Args) -> i32 {
     // One bullet per note; a multi-line note keeps its lines inside that bullet.
     let note = note.trim().lines().map(str::trim_end).collect::<Vec<_>>().join("\n  ");
     cur.push_str(&format!("- {note}\n"));
-    fs::write(&path, cur).unwrap_or_else(|err| die(&err.to_string()));
+    fs::write(&path, cur).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", path.display())));
     println!("noted");
     0
 }
