@@ -65,3 +65,8 @@ pub fn exclude_musher_dir(root: &Path) {
         let _ = std::fs::write(&excl, format!("{cur}{sep}/.musher/\n"));
     }
 }
+
+/// `.musher/` ended up committed (before it was excluded): exclude rules do not hide tracked files.
+pub fn musher_dir_tracked(root: &Path) -> bool {
+    git(root, &["ls-files", "--error-unmatch", "--", ".musher"]).map(|o| !o.trim().is_empty()).unwrap_or(false)
+}

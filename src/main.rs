@@ -214,6 +214,9 @@ fn cmd_init() -> i32 {
     if e.is_git {
         git::exclude_musher_dir(&e.root);
         println!(".musher/ is excluded from git (via .git/info/exclude)");
+        if git::musher_dir_tracked(&e.root) {
+            println!("warning: .musher/ is already tracked by git, so the exclude has no effect — run `git rm -r --cached .musher` and commit");
+        }
     } else {
         println!("note: not a git repository — run `git init` for worktree isolation, or set isolation = \"none\"");
     }
@@ -298,6 +301,9 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
             eprintln!("musher: note — uncommitted changes are not visible to agents (worktrees start from HEAD)");
         }
         git::exclude_musher_dir(&e.root);
+        if git::musher_dir_tracked(&e.root) {
+            eprintln!("musher: warning — .musher/ is tracked by git (committed before it was excluded); `git rm -r --cached .musher` keeps run state out of your commits");
+        }
         (head, git::current_ref(&e.root))
     } else {
         (String::new(), String::new())
