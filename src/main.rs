@@ -904,33 +904,6 @@ fn extract_toml(s: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{extract_toml, Args};
-
-    #[test]
-    fn dash_f_is_follow_only_for_log_commands() {
-        let raw: Vec<String> = ["api", "-f"].iter().map(|s| s.to_string()).collect();
-        let a = Args::parse(&raw, true);
-        assert!(a.has("-f") && a.pos == vec!["api".to_string()]);
-        let raw: Vec<String> = ["-f", "plan.toml", "--bg"].iter().map(|s| s.to_string()).collect();
-        let a = Args::parse(&raw, false);
-        assert_eq!(a.get("-f"), Some("plan.toml"));
-        assert!(a.has("--bg"));
-    }
-
-    #[test]
-    fn plan_output_shapes() {
-        let bare = "[[task]]\nid = \"a\"\nprompt = \"x\"\n";
-        assert_eq!(extract_toml(bare), bare);
-        let fenced = format!("Here is the plan:\n```toml\n[settings]\nparallel = 2\n\n{bare}```\nDone.");
-        assert_eq!(extract_toml(&fenced), bare);
-        let prose = format!("Sure.\n[settings]\nagent = \"codex\"\n{bare}");
-        assert_eq!(extract_toml(&prose), bare);
-        assert_eq!(extract_toml("no plan here"), "");
-    }
-}
-
 fn cmd_completions(args: &Args) -> i32 {
     const CMDS: &str =
         "init run do resume stop plan watch status wait ls report logs events diff ask attach merge pr mem clean doctor completions help version";
@@ -1503,4 +1476,31 @@ fn cmd_doctor() -> i32 {
         println!("{} {:<10} {}", if v.is_some() { "✓" } else { "·" }, bin, v.unwrap_or_else(|| miss.into()));
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_toml, Args};
+
+    #[test]
+    fn dash_f_is_follow_only_for_log_commands() {
+        let raw: Vec<String> = ["api", "-f"].iter().map(|s| s.to_string()).collect();
+        let a = Args::parse(&raw, true);
+        assert!(a.has("-f") && a.pos == vec!["api".to_string()]);
+        let raw: Vec<String> = ["-f", "plan.toml", "--bg"].iter().map(|s| s.to_string()).collect();
+        let a = Args::parse(&raw, false);
+        assert_eq!(a.get("-f"), Some("plan.toml"));
+        assert!(a.has("--bg"));
+    }
+
+    #[test]
+    fn plan_output_shapes() {
+        let bare = "[[task]]\nid = \"a\"\nprompt = \"x\"\n";
+        assert_eq!(extract_toml(bare), bare);
+        let fenced = format!("Here is the plan:\n```toml\n[settings]\nparallel = 2\n\n{bare}```\nDone.");
+        assert_eq!(extract_toml(&fenced), bare);
+        let prose = format!("Sure.\n[settings]\nagent = \"codex\"\n{bare}");
+        assert_eq!(extract_toml(&prose), bare);
+        assert_eq!(extract_toml("no plan here"), "");
+    }
 }
