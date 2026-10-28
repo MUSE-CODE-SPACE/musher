@@ -119,7 +119,7 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 ```
 
 * **failed**: the agent errored, timed out, or the check still failed after all retries.
-* **blocked**: the check is failing *and* the agent was denied a tool it asked for. Run `musher attach <task>` and grant it.
+* **blocked**: the check is failing *and* the agent was denied a tool it asked for (run `musher attach <task>` and grant it), or the agent hit a usage limit, quota or auth error. Those are not retried: a person has to act, then `musher resume`.
 * **skipped**: a dependency did not finish. The reason is shown.
 * **stopped**: you pressed Ctrl-C. `musher resume` picks up exactly here and keeps finished tasks. If you edited a prompt in `musher.toml` in the meantime, the edit is used.
 

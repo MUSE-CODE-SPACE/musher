@@ -326,6 +326,11 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         }
         if !out.ok {
             let why = if out.error.is_empty() { format!("agent exited with {}", out.code) } else { out.error.clone() };
+            if needs_human(&why) {
+                // Quota, auth or billing: retrying only burns attempts. Hand it to a person.
+                run.set_status(id, Status::Blocked, &agent::clip(&why, 120));
+                return;
+            }
             if attempt < retries {
                 feedback = Some(format!("The previous attempt ended with an error: {why}\nPlease continue and finish the task."));
                 continue;
@@ -360,6 +365,29 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         }
         return;
     }
+}
+
+/// Errors no retry can fix: the account, not the code, is the problem.
+fn needs_human(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    [
+        "usage limit",
+        "rate limit",
+        "quota",
+        "insufficient credit",
+        "billing",
+        "purchase more",
+        "unauthorized",
+        "invalid api key",
+        "not logged in",
+        "please log in",
+        "authentication",
+        "401",
+        "402",
+        "429",
+    ]
+    .iter()
+    .any(|p| e.contains(p))
 }
 
 fn finish_done(ctx: &Ctx, id: &str, cwd: &Path, base: &str, summary: &str, denied: &[String]) {
@@ -734,5 +762,19 @@ impl Log {
     }
     fn section(&mut self, title: &str) {
         self.line(&format!("\n──── {title} ────"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_human;
+
+    #[test]
+    fn human_needed_errors() {
+        assert!(needs_human("You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage"));
+        assert!(needs_human("Error: Invalid API key"));
+        assert!(needs_human("HTTP 429 Too Many Requests"));
+        assert!(!needs_human("agent exited with 1"));
+        assert!(!needs_human("tests failed: 3 errors"));
     }
 }

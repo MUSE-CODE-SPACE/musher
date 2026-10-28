@@ -115,7 +115,7 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 ```
 
 * **failed**: 에이전트 오류, 시간 초과, 또는 재시도를 모두 써도 검증 실패
-* **blocked**: 검증이 실패하는데 에이전트가 요청한 도구 권한이 거부된 경우. `musher attach <task>`로 들어가 권한을 주면 됨
+* **blocked**: 검증이 실패하는데 에이전트가 요청한 도구 권한이 거부된 경우(`musher attach <task>`로 들어가 권한을 주면 됨), 또는 에이전트가 사용 한도·할당량·인증 오류에 걸린 경우. 이런 오류는 재시도하지 않으며, 사람이 조치한 뒤 `musher resume`
 * **skipped**: 의존 태스크가 완료되지 못함 (사유 표시)
 * **stopped**: Ctrl-C로 중단. `musher resume`을 실행하면 완료된 작업은 그대로 두고 이 지점부터 이어서 진행. 그 사이에 `musher.toml`의 프롬프트를 고쳤다면 수정본이 반영됨
 
