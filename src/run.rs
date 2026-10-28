@@ -550,7 +550,7 @@ fn stack_deps(ctx: &Ctx, task: &Task, spec: &AgentSpec, cwd: &Path, inv: &Invoke
              Remove all conflict markers. Do not start any other work and do not commit — musher commits the merge.\n"
         );
         if let Some(c) = &task.check {
-            prompt.push_str(&format!("You may verify with `{c}`.\n"));
+            prompt.push_str(&format!("You may verify with `{c}`, run exactly like that with nothing appended (other commands need approval).\n"));
         }
         let argv = agent::build_argv(
             &spec.cmd,

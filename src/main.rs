@@ -1415,20 +1415,29 @@ fn merge_resolve(e: &Env, args: &Args, dir: &Path) -> i32 {
         }
     }
     let check = (!checks.is_empty()).then(|| checks.join(" && "));
+    // Same agent/model as the tasks being integrated, when they agree (a cheap model stays cheap).
+    let done_tasks: Vec<&Task> = plan.tasks.iter().filter(|t| done.contains(&t.id)).collect();
+    let common = |pick: fn(&Task) -> Option<String>| -> Option<String> {
+        let first = done_tasks.first().and_then(|t| pick(t));
+        done_tasks.iter().all(|t| pick(t) == first).then_some(first).flatten()
+    };
+    let agent = common(|t| t.agent.clone());
+    let model = common(|t| t.model.clone());
     plan.tasks.push(Task {
         id: id.clone(),
         prompt: format!(
             "Integrate the finished work of tasks {}. Their branches are merged into yours (any conflicts were resolved while stacking). \
-             Make sure everything works together: every task's behaviour must survive. Fix integration problems only; add nothing new.",
+             Make sure everything works together: every task's behaviour must survive. Fix integration problems only; add nothing new. \
+             Verify with the check command exactly as given, nothing appended.",
             done.join(", ")
         ),
-        agent: None,
+        agent: agent.clone(),
         after: done.clone(),
         check,
         retries: None,
         timeout: None,
         permission: None,
-        model: None,
+        model,
         allow: vec![],
     });
     apply_overrides(&mut plan, args);
@@ -1440,7 +1449,7 @@ fn merge_resolve(e: &Env, args: &Args, dir: &Path) -> i32 {
         s.ended = 0;
         s.tasks.push(TaskState {
             id: id.clone(),
-            agent: plan.settings.agent.clone(),
+            agent: agent.clone().unwrap_or_else(|| plan.settings.agent.clone()),
             status: Status::Queued,
             after: done.clone(),
             branch: String::new(),
