@@ -1469,7 +1469,12 @@ fn cmd_doctor() -> i32 {
     if e.is_git {
         println!("{} commits    {}", ok(git::head(&e.root).is_ok()), if git::head(&e.root).is_ok() { "HEAD found" } else { "no commits yet" });
     }
-    println!("{} musher.toml{}", ok(e.root.join("musher.toml").exists()), if e.root.join("musher.toml").exists() { "" } else { " missing (`musher init`)" });
+    let toml = e.root.join("musher.toml");
+    match (toml.exists(), Plan::load(&toml)) {
+        (false, _) => println!("· musher.toml missing (`musher init`)"),
+        (true, Ok(p)) => println!("✓ musher.toml {} tasks, agent {}", p.tasks.len(), p.settings.agent),
+        (true, Err(err)) => println!("✗ musher.toml {}", err.trim_start_matches(&format!("{}: ", toml.display()))),
+    }
     for (bin, flag) in [("claude", "--version"), ("codex", "--version"), ("gemini", "--version"), ("gh", "--version")] {
         let v = ver(bin, flag);
         let miss = if bin == "gh" { "not installed (optional, for `musher pr`)" } else { "not installed" };
