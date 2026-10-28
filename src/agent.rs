@@ -35,7 +35,29 @@ pub fn build_argv(template: &[String], v: &Vars) -> Vec<String> {
             }
             continue;
         }
-        out.push(arg.replace("{prompt}", v.prompt).replace("{session}", v.session).replace("{cwd}", v.cwd).replace("{permission}", v.permission));
+        out.push(expand(arg, &[("{prompt}", v.prompt), ("{session}", v.session), ("{cwd}", v.cwd), ("{permission}", v.permission)]));
+    }
+    out
+}
+
+/// Substitute placeholders in one pass over the template, so text that was inserted (a prompt
+/// that itself mentions `{cwd}`) is never scanned again.
+fn expand(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while !rest.is_empty() {
+        let hit = vars.iter().filter_map(|(k, v)| rest.find(k).map(|i| (i, *k, *v))).min_by_key(|(i, _, _)| *i);
+        match hit {
+            Some((i, k, v)) => {
+                out.push_str(&rest[..i]);
+                out.push_str(v);
+                rest = &rest[i + k.len()..];
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
     }
     out
 }
@@ -197,6 +219,13 @@ mod tests {
         assert_eq!(argv, s(&["x", "--resume", "abc", "-m", "opus"]));
         let vars = Vars { allow: "Bash(make test)", ..vars };
         assert_eq!(build_argv(&s(&["x", "{allow:--allowedTools}"]), &vars), s(&["x", "--allowedTools", "Bash(make test)"]));
+    }
+
+    #[test]
+    fn placeholders_inside_the_prompt_survive() {
+        let vars = Vars { prompt: "mention {cwd} and {session} and {prompt}", session: "S", cwd: "/w", permission: "p", model: "", allow: "" };
+        let argv = build_argv(&s(&["x", "{prompt}", "{cwd}"]), &vars);
+        assert_eq!(argv, s(&["x", "mention {cwd} and {session} and {prompt}", "/w"]));
     }
 
     #[test]
