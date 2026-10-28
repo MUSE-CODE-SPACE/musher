@@ -11,7 +11,7 @@ use run::{Ctx, Observer};
 use state::{list_runs, load_state, now, Run, RunState, Status, TaskState};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{IsTerminal, Read, Seek, SeekFrom};
+use std::io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command, Stdio};
@@ -1003,9 +1003,18 @@ fn cmd_logs(args: &Args) -> i32 {
     let id = task_arg(args, "usage: musher logs <task> [-f]");
     let path = dir.join("logs").join(format!("{id}.log"));
     let mut f = fs::File::open(&path).unwrap_or_else(|_| die(&format!("no log for {id:?} yet")));
-    let mut buf = String::new();
-    let _ = f.read_to_string(&mut buf);
-    print!("{}", pretty_log(&buf, args.has("--raw")));
+    // Stream: a chatty agent can leave a log of tens of megabytes.
+    {
+        let out = std::io::stdout();
+        let mut out = std::io::BufWriter::new(out.lock());
+        let mut reader = std::io::BufReader::new(&mut f);
+        let mut line = String::new();
+        while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
+            let _ = out.write_all(pretty_log(&line, args.has("--raw")).as_bytes());
+            line.clear();
+        }
+        let _ = out.flush();
+    }
     if !args.has("-f") {
         return 0;
     }
