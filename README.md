@@ -132,7 +132,7 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 | `musher do "<prompt>" [--agent] [--check] [--id] [--model] [--bg]` | one-off task |
 | `musher plan "<goal>" [--out f] [--print] [--force] [--model m]` | an agent reads the repo and writes `musher.toml`: 2–6 tasks with checks and dependencies; your `[settings]` are kept. `--model` is used for planning and set on every task it writes |
 | `musher resume [run]` | continue a stopped or failed run |
-| `musher stop [run]` | stop a background run; agents are terminated, finished work is kept |
+| `musher stop [run]` | stop a background run (the newest running one by default); agents are terminated, finished work is kept |
 | `musher watch` / `status [--json]` / `wait` / `ls [--json]` | observe from anywhere; `wait` exits 0 only if all tasks are done |
 | `musher report [run] [task…]` | markdown report: status, attempts, time, cost, files changed and every task's own summary (also written to `report.md` when a run ends) |
 | `musher logs <task> [-f] [--raw]` | readable agent transcript (tools used, answers, denials) and check output |

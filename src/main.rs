@@ -518,6 +518,17 @@ fn run_dir(e: &Env, id: &str) -> PathBuf {
     d
 }
 
+/// `--run <id>`, else the newest run that is still running, else the latest run.
+/// For watch/stop: a finished run is rarely the one you mean while another is active.
+fn find_active_run(e: &Env, args: &Args) -> PathBuf {
+    if args.get("--run").is_none() {
+        if let Some(d) = list_runs(&e.home).into_iter().find(|d| load_state(d).map(|st| !st.finished && pid_alive(st.pid)).unwrap_or(false)) {
+            return d;
+        }
+    }
+    find_run(e, args)
+}
+
 /// `--run <id>`, else the latest run.
 fn find_run(e: &Env, args: &Args) -> PathBuf {
     if let Some(id) = args.get("--run") {
@@ -633,7 +644,10 @@ fn cmd_status(args: &Args) -> i32 {
 
 fn cmd_watch(args: &Args) -> i32 {
     let e = env();
-    let dir = find_run(&e, args);
+    let dir = match args.pos.first() {
+        Some(id) => run_dir(&e, id),
+        None => find_active_run(&e, args),
+    };
     run::install_signal_handlers();
     let mut live = ui::Live::new();
     loop {
@@ -714,7 +728,7 @@ fn cmd_stop(args: &Args) -> i32 {
     let e = env();
     let dir = match args.pos.first() {
         Some(id) => run_dir(&e, id),
-        None => find_run(&e, args),
+        None => find_active_run(&e, args),
     };
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
     if st.finished || !pid_alive(st.pid) {
