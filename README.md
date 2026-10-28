@@ -40,6 +40,7 @@ Running several coding agents at once tends to break in the same few ways:
 ```sh
 # prebuilt binary (macOS / Linux, arm64 / x86_64)
 curl -fsSL https://raw.githubusercontent.com/MUSE-CODE-SPACE/musher/main/install.sh | sh
+# pin a version / choose the directory: MUSHER_VERSION=v0.3.0 MUSHER_INSTALL_DIR=/usr/local/bin
 
 # or from source
 cargo install --git https://github.com/MUSE-CODE-SPACE/musher

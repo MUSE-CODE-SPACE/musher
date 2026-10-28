@@ -40,6 +40,7 @@ musher run 261027-1102  3/5 done  2 active  $0.41  04:12
 ```sh
 # 사전 빌드 바이너리 (macOS / Linux, arm64 / x86_64)
 curl -fsSL https://raw.githubusercontent.com/MUSE-CODE-SPACE/musher/main/install.sh | sh
+# 버전 고정 / 설치 위치 지정: MUSHER_VERSION=v0.3.0 MUSHER_INSTALL_DIR=/usr/local/bin
 
 # 또는 소스에서
 cargo install --git https://github.com/MUSE-CODE-SPACE/musher
