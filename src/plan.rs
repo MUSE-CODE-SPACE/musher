@@ -200,6 +200,14 @@ impl Plan {
             return Err(format!("settings.isolation must be \"worktree\" or \"none\", got {:?}", self.settings.isolation));
         }
         parse_duration(&self.settings.timeout)?;
+        for (name, a) in &self.agents {
+            if a.cmd.is_empty() || a.cmd[0].trim().is_empty() {
+                return Err(format!("agent {name:?} needs a non-empty cmd, e.g. cmd = [\"aider\", \"--message\", \"{{prompt}}\"]"));
+            }
+            if !a.cmd.iter().any(|x| x.contains("{prompt}")) && !a.raw {
+                return Err(format!("agent {name:?}: cmd never uses {{prompt}}; add it, or set raw = true for a fixed command"));
+            }
+        }
         let mut seen = HashSet::new();
         for t in &self.tasks {
             if t.id.is_empty() || !t.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
@@ -358,6 +366,14 @@ mod tests {
         assert!(Plan::parse(unk).unwrap_err().contains("unknown task"));
         let dup = "[[task]]\nid='a'\nprompt='x'\n[[task]]\nid='a'\nprompt='y'\n";
         assert!(Plan::parse(dup).unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
+    fn rejects_bad_agent_cmds() {
+        assert!(Plan::parse("[agents.x]\ncmd=[]\n").unwrap_err().contains("non-empty cmd"));
+        assert!(Plan::parse("[agents.x]\ncmd=['tool']\n").unwrap_err().contains("{prompt}"));
+        assert!(Plan::parse("[agents.x]\ncmd=['tool']\nraw=true\n").is_ok());
+        assert!(Plan::parse("[agents.x]\ncmd=['tool','{prompt}']\n").is_ok());
     }
 
     #[test]

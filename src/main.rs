@@ -1527,6 +1527,13 @@ fn cmd_doctor() -> i32 {
         (true, Ok(p)) => println!("✓ musher.toml {} tasks, agent {}", p.tasks.len(), p.settings.agent),
         (true, Err(err)) => println!("✗ musher.toml {}", err.trim_start_matches(&format!("{}: ", toml.display()))),
     }
+    // Custom agents from musher.toml: is the program there?
+    if let Ok(p) = Plan::load(&toml) {
+        for (name, a) in p.agents.iter().filter(|(n, _)| !plan::builtin_agents().contains_key(*n)) {
+            let found = Command::new("sh").arg("-c").arg(format!("command -v {}", a.cmd[0])).output().map(|o| o.status.success()).unwrap_or(false);
+            println!("{} agent {:<4} {}", ok(found), name, if found { format!("{} found", a.cmd[0]) } else { format!("{} not found in PATH", a.cmd[0]) });
+        }
+    }
     for (bin, flag) in [("claude", "--version"), ("codex", "--version"), ("gemini", "--version"), ("gh", "--version")] {
         let v = ver(bin, flag);
         let miss = if bin == "gh" { "not installed (optional, for `musher pr`)" } else { "not installed" };
