@@ -485,13 +485,19 @@ fn slug(s: &str) -> String {
     }
 }
 
+/// The run directory for an id, or a clear error.
+fn run_dir(e: &Env, id: &str) -> PathBuf {
+    let d = e.home.join("runs").join(id);
+    if !d.join("state.json").exists() {
+        die(&format!("no run {id:?} — see `musher ls`"));
+    }
+    d
+}
+
+/// `--run <id>`, else the latest run.
 fn find_run(e: &Env, args: &Args) -> PathBuf {
     if let Some(id) = args.get("--run") {
-        let d = e.home.join("runs").join(id);
-        if !d.join("state.json").exists() {
-            die(&format!("no run {id:?} — see `musher ls`"));
-        }
-        return d;
+        return run_dir(e, id);
     }
     list_runs(&e.home).into_iter().next().unwrap_or_else(|| die("no runs yet — start one with `musher run` or `musher do`"))
 }
@@ -510,7 +516,7 @@ fn cmd_resume(args: &Args, raw: &[String]) -> i32 {
     let e = env();
     let id_flag = args.pos.first().map(String::from).or_else(|| args.get("--run").map(String::from));
     let dir = match id_flag {
-        Some(id) => e.home.join("runs").join(id),
+        Some(id) => run_dir(&e, &id),
         None => find_run(&e, args),
     };
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
@@ -612,7 +618,7 @@ fn cmd_watch(args: &Args) -> i32 {
 fn cmd_wait(args: &Args) -> i32 {
     let e = env();
     let dir = match args.pos.first() {
-        Some(id) => e.home.join("runs").join(id),
+        Some(id) => run_dir(&e, id),
         None => find_run(&e, args),
     };
     loop {
@@ -669,7 +675,7 @@ fn cmd_ls(args: &Args) -> i32 {
 fn cmd_stop(args: &Args) -> i32 {
     let e = env();
     let dir = match args.pos.first() {
-        Some(id) => e.home.join("runs").join(id),
+        Some(id) => run_dir(&e, id),
         None => find_run(&e, args),
     };
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
