@@ -523,6 +523,20 @@ fn cmd_resume(args: &Args, raw: &[String]) -> i32 {
     if !st.finished && pid_alive(st.pid) {
         die(&format!("run {} is still running (pid {}) — `musher watch`", st.id, st.pid));
     }
+    // Tasks added to musher.toml after the run started are not part of it.
+    let plan_path = args.get("-f").map(PathBuf::from).unwrap_or_else(|| e.root.join("musher.toml"));
+    let new_tasks: Vec<String> =
+        Plan::load(&plan_path).map(|p| p.tasks.iter().filter(|t| st.task(&t.id).is_none()).map(|t| t.id.clone()).collect()).unwrap_or_default();
+    if !new_tasks.is_empty() {
+        eprintln!(
+            "musher: note — {} in musher.toml {} not in run {}; `musher run --only {}` runs {}",
+            new_tasks.join(", "),
+            if new_tasks.len() == 1 { "is" } else { "are" },
+            st.id,
+            new_tasks.join(","),
+            if new_tasks.len() == 1 { "it" } else { "them" }
+        );
+    }
     if st.tasks.iter().all(|t| t.status == Status::Done) {
         println!("run {} is already complete", st.id);
         return 0;
