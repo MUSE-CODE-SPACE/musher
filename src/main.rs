@@ -1252,6 +1252,10 @@ fn cmd_merge(args: &Args) -> i32 {
             eprintln!("skip {}: branch {} is gone", t.id, t.branch);
             continue;
         }
+        if git::git(&e.root, &["rev-list", "--count", &format!("{}..{}", st.base_commit, t.branch)]).map(|n| n.trim() == "0").unwrap_or(false) {
+            println!("= {} made no commits", t.id);
+            continue;
+        }
         candidates.push(t);
     }
     // A branch stacked into a later task's branch arrives with it, conflicts already resolved there.

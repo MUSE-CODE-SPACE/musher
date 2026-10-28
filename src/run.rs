@@ -59,6 +59,8 @@ pub fn execute(ctx: Arc<Ctx>, ui: &mut dyn Observer) -> bool {
     let mut running: HashSet<String> = HashSet::new();
     let budget = ctx.plan.settings.budget_usd;
     let mut budget_hit = false;
+    let worktrees = ctx.run.snapshot().isolation == "worktree";
+    let root_before = if worktrees { git::git(&ctx.root, &["status", "--porcelain"]).unwrap_or_default() } else { String::new() };
 
     loop {
         if STOP.load(Ordering::SeqCst) {
@@ -128,6 +130,19 @@ pub fn execute(ctx: Arc<Ctx>, ui: &mut dyn Observer) -> bool {
         s.finished = true;
     });
     ctx.run.event("", if STOP.load(Ordering::SeqCst) { "stopped" } else { "finished" }, "");
+    if worktrees {
+        // Agents are told to stay in their worktree; say so if one did not.
+        let after = git::git(&ctx.root, &["status", "--porcelain"]).unwrap_or_default();
+        let new_lines: Vec<&str> = after.lines().filter(|l| !root_before.lines().any(|b| b == *l) && !l.ends_with("musher.toml")).collect();
+        if !new_lines.is_empty() {
+            let files: Vec<&str> = new_lines.iter().map(|l| l[3..].trim()).collect();
+            ctx.run.event("", "root-changed", &files.join(", "));
+            eprintln!(
+                "musher: warning — files in your own working tree changed during the run: {} (agents should only touch their worktree; check `git diff`)",
+                files.join(", ")
+            );
+        }
+    }
     let snap = ctx.run.snapshot();
     let report = crate::report::write(&ctx.run.dir, &snap);
     if let Some(cmd) = &ctx.plan.settings.on_finish {
@@ -301,6 +316,14 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         denied.dedup();
 
         if ctx.plan.settings.auto_commit && run.snapshot().isolation == "worktree" {
+            // An agent that switched branches would leave its work (and any commits it made)
+            // off the task branch. Point the task branch at whatever HEAD is now, files untouched.
+            let branch = run.snapshot().task(id).map(|t| t.branch.clone()).unwrap_or_default();
+            if !branch.is_empty() && git::current_ref(&cwd) != branch {
+                log.line(&format!("!! agent left branch {branch} (now on {}); moving the task branch here", git::current_ref(&cwd)));
+                run.event(id, "branch-restored", &git::current_ref(&cwd));
+                let _ = git::git(&cwd, &["checkout", "-q", "-B", &branch]);
+            }
             let n = run.snapshot().task(id).map(|t| t.attempts).unwrap_or(1);
             let msg = format!("musher({id}): attempt {n}\n\n{}", agent::clip(&last_summary, 400));
             match git::commit_all(&cwd, &msg) {
