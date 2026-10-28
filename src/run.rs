@@ -428,7 +428,8 @@ pub fn recheck(ctx: &Ctx, id: &str) -> bool {
     let t = snap.task(id).expect("task state");
     let cwd = if snap.isolation == "worktree" { PathBuf::from(&t.worktree) } else { ctx.root.clone() };
     if snap.isolation == "worktree" && !cwd.join(".git").exists() {
-        run.set_status(id, Status::Failed, "worktree is gone (musher clean?) — `musher resume` recreates it");
+        // Nothing to check against; leave the task's status as it is.
+        eprintln!("musher: {id}'s worktree is gone (musher clean?) — `musher resume` or `musher ask {id} \"…\"` recreates it from its branch");
         return false;
     }
     let base = if t.start.is_empty() { snap.base_commit.clone() } else { t.start.clone() };
