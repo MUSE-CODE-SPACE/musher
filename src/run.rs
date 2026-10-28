@@ -788,7 +788,7 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
     reap(pid);
     run.task(id, |t| t.pid = 0);
     let (summary, mut error, denied, is_error) = out_thread.join().unwrap_or_default();
-    let err_tail = err_thread.join().unwrap_or_default();
+    let err_tail = feedback_safe(&err_thread.join().unwrap_or_default());
     let code = status.and_then(|s| s.code()).unwrap_or(-1);
     let ok = code == 0 && !is_error && !timed_out;
     if !ok && error.is_empty() {
@@ -796,6 +796,19 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
     }
     run.save();
     AgentOut { ok, code, timed_out, summary, error, denied }
+}
+
+/// Text that goes back to an agent through an environment variable or argv: no NUL bytes
+/// (the OS refuses them) and bounded in size (a megabyte-long line would hit ARG_MAX).
+fn feedback_safe(s: &str) -> String {
+    let s: String = s.chars().filter(|c| *c != '\0').collect();
+    let max = 8000;
+    if s.chars().count() <= max {
+        s
+    } else {
+        let skip = s.chars().count() - max;
+        format!("… [{skip} characters omitted]\n{}", s.chars().skip(skip).collect::<String>())
+    }
 }
 
 /// Run a shell command; returns (passed, exit code, last lines of output).
@@ -833,7 +846,7 @@ fn run_check(id: &str, cmd: &str, cwd: &Path, timeout: Duration, log: &mut Log) 
     reap(pid);
     let lines = reader.join().unwrap_or_default();
     let code = status.and_then(|s| s.code()).unwrap_or(-1);
-    let tail = lines[lines.len().saturating_sub(80)..].join("\n");
+    let tail = feedback_safe(&lines[lines.len().saturating_sub(80)..].join("\n"));
     log.line(&format!("== exit {code}"));
     (code == 0, code, tail)
 }
@@ -879,6 +892,16 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use super::needs_human;
+
+    #[test]
+    fn feedback_is_env_safe() {
+        use super::feedback_safe;
+        assert_eq!(feedback_safe("a\0b"), "ab");
+        let big = "x".repeat(20_000);
+        let f = feedback_safe(&big);
+        assert!(f.starts_with("… [12000 characters omitted]"));
+        assert!(f.chars().count() < 8100);
+    }
 
     #[test]
     fn lost_sessions() {
