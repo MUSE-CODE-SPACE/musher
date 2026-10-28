@@ -179,7 +179,7 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 |---|---|---|
 | Core idea | Multiplex interactive agent terminals | Run a graph of agent tasks to a verified result |
 | Runtime model | Background server owns the PTYs | No server: a run is a process plus files in `.musher/` |
-| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (738 KB, measured) |
+| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (755 KB, measured) |
 | Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **3.1 MB RSS** (8 agents, measured) |
 | Idle cost | Server process stays resident | **Nothing runs** between runs |
 | Agent state | Process name + **screen-pattern manifests**; new prompts "may initially show as `idle` instead of `blocked`"² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
