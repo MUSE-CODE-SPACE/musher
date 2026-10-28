@@ -25,7 +25,7 @@ const HELP: &str = "musher — drive a team of AI coding agents from one small b
 
 USAGE
   musher init                       write musher.toml and set up .musher/
-  musher run [-j N] [--only a,b]    run the task graph in musher.toml
+  musher run [-j N] [--only a,b]    run the task graph in musher.toml (--only pulls in dependencies; --no-deps: just those tasks, from HEAD)
   musher do \"<prompt>\" [opts]       one-off task: --agent, --check, --id, --retries
   musher resume [run]               continue a stopped or failed run (done tasks are kept)
   musher stop [run]                 stop a background run (agents are terminated, work is kept)
@@ -253,24 +253,34 @@ fn apply_overrides(p: &mut Plan, args: &Args) {
 }
 
 /// Keep only the selected tasks plus everything they depend on.
-fn select_tasks(p: &mut Plan, only: &str) {
+/// `--only`: keep the selected tasks plus everything they depend on. With `--no-deps`, keep
+/// only the selected tasks and start them from HEAD (their dependencies' work is already landed).
+fn select_tasks(p: &mut Plan, only: &str, no_deps: bool) {
     let mut keep: Vec<String> = only.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     for k in &keep {
         if p.task(k).is_none() {
             die(&format!("--only: no task {k:?}"));
         }
     }
-    let mut i = 0;
-    while i < keep.len() {
-        let deps = p.task(&keep[i]).map(|t| t.after.clone()).unwrap_or_default();
-        for d in deps {
-            if !keep.contains(&d) {
-                keep.push(d);
+    if !no_deps {
+        let mut i = 0;
+        while i < keep.len() {
+            let deps = p.task(&keep[i]).map(|t| t.after.clone()).unwrap_or_default();
+            for d in deps {
+                if !keep.contains(&d) {
+                    keep.push(d);
+                }
             }
+            i += 1;
         }
-        i += 1;
     }
     p.tasks.retain(|t| keep.contains(&t.id));
+    if no_deps {
+        // Dropped dependencies are assumed merged; the kept tasks start from HEAD.
+        for t in &mut p.tasks {
+            t.after.retain(|d| keep.contains(d));
+        }
+    }
 }
 
 fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
@@ -439,7 +449,7 @@ fn cmd_run(args: &Args, raw: &[String]) -> i32 {
     let e = env();
     let mut plan = load_plan(&e, args);
     if let Some(only) = args.get("--only") {
-        select_tasks(&mut plan, only);
+        select_tasks(&mut plan, only, args.has("--no-deps"));
     }
     if args.has("--dry-run") {
         return dry_run(&plan);
