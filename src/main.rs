@@ -1284,11 +1284,14 @@ fn cmd_merge(args: &Args) -> i32 {
             Err(err) => {
                 let files = git::git(&e.root, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default().replace('\n', ", ");
                 let _ = git::git(&e.root, &["merge", "--abort"]);
-                eprintln!(
-                    "✗ {} conflicts with what is already merged{}",
-                    t.id,
-                    if files.is_empty() { format!(": {}", agent::clip(&err, 120)) } else { format!(" ({files})") }
-                );
+                if files.is_empty() {
+                    // Not a conflict: signing, hooks, permissions… show git's own words.
+                    let why = err.split_once(": ").map(|(_, r)| r).unwrap_or(&err);
+                    eprintln!("✗ {}: git could not create the merge commit: {}", t.id, agent::clip(why, 160));
+                    eprintln!("  your branch is clean again (merge aborted). Fix the git setting, then `musher merge` again.");
+                    return 1;
+                }
+                eprintln!("✗ {} conflicts with what is already merged ({files})", t.id);
                 eprintln!("  your branch is clean again (merge aborted).");
                 eprintln!("  `musher merge --resolve` lets an agent integrate all finished tasks on a branch, verified by their checks, then merges that.");
                 return 1;

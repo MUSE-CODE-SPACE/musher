@@ -44,7 +44,7 @@ pub fn commit_all(dir: &Path, msg: &str) -> Result<bool, String> {
     if git(dir, &["diff", "--cached", "--quiet"]).is_ok() {
         return Ok(false);
     }
-    git(dir, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "commit", "--no-verify", "-q", "-m", msg])?;
+    git(dir, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-q", "-m", msg])?;
     Ok(true)
 }
 

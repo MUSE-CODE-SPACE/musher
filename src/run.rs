@@ -306,7 +306,12 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
             match git::commit_all(&cwd, &msg) {
                 Ok(true) => log.line("== committed changes"),
                 Ok(false) => {}
-                Err(e) => log.line(&format!("!! commit failed: {e}")),
+                Err(e) => {
+                    // Work that is not on the branch is invisible to diff, merge and pr: not "done".
+                    log.line(&format!("!! commit failed: {e}"));
+                    run.set_status(id, Status::Failed, &agent::clip(&format!("could not commit: {e}"), 120));
+                    return;
+                }
             }
         }
         if STOP.load(Ordering::SeqCst) {
@@ -454,7 +459,10 @@ fn stack_deps(ctx: &Ctx, task: &Task, spec: &AgentSpec, cwd: &Path, inv: &Invoke
     let id = task.id.as_str();
     for dep in &task.after {
         let dep_branch = format!("musher/{rid}/{dep}");
-        let merged = git::git(cwd, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "merge", "--no-ff", "--no-edit", "-q", &dep_branch]);
+        let merged = git::git(
+            cwd,
+            &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "-q", &dep_branch],
+        );
         if merged.is_ok() {
             log.line(&format!("== merged {dep_branch}"));
             continue;
@@ -499,7 +507,10 @@ fn stack_deps(ctx: &Ctx, task: &Task, spec: &AgentSpec, cwd: &Path, inv: &Invoke
             return Err(format!("could not resolve conflict with {dep}: {}", agent::clip(&why, 120)));
         }
         git::git(cwd, &["add", "-A"])?;
-        git::git(cwd, &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "commit", "--no-verify", "-q", "--no-edit"])?;
+        git::git(
+            cwd,
+            &["-c", "user.name=musher", "-c", "user.email=musher@localhost", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-q", "--no-edit"],
+        )?;
         log.line(&format!("== resolved and merged {dep_branch}"));
         ctx.run.event(id, "resolved", dep);
     }
