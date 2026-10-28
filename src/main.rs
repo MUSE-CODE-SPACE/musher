@@ -304,6 +304,23 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
             read_only.join(", ")
         );
     }
+    let bypass: Vec<&str> = plan
+        .tasks
+        .iter()
+        .filter(|t| {
+            t.agent.as_deref().unwrap_or(&plan.settings.agent) == "claude"
+                && t.permission.as_deref().unwrap_or(&plan.settings.permission) == "bypassPermissions"
+        })
+        .map(|t| t.id.as_str())
+        .collect();
+    if !bypass.is_empty() {
+        let where_ = if plan.settings.isolation == "worktree" { "inside its own worktree" } else { "DIRECTLY IN YOUR REPOSITORY (isolation = \"none\")" };
+        eprintln!(
+            "musher: warning — {} run{} with bypassPermissions: the agent executes anything without asking, {where_}",
+            bypass.join(", "),
+            if bypass.len() == 1 { "s" } else { "" }
+        );
+    }
     let (base_commit, base_ref) = if plan.settings.isolation == "worktree" {
         if !e.is_git {
             die("worktree isolation needs a git repository (git init && git commit), or pass --no-worktree");
@@ -491,9 +508,15 @@ fn dry_run(plan: &Plan) -> i32 {
         wave += 1;
     }
     println!(
-        "\nparallel {} · isolation {} · timeout {} · retries {}",
-        plan.settings.parallel, plan.settings.isolation, plan.settings.timeout, plan.settings.retries
+        "\nparallel {} · isolation {} · timeout {} · retries {} · permission {}",
+        plan.settings.parallel, plan.settings.isolation, plan.settings.timeout, plan.settings.retries, plan.settings.permission
     );
+    if plan.settings.permission == "bypassPermissions" || plan.tasks.iter().any(|t| t.permission.as_deref() == Some("bypassPermissions")) {
+        println!(
+            "warning: bypassPermissions lets the agent execute anything without asking{}",
+            if plan.settings.isolation == "worktree" { "" } else { " — and isolation is off, so that is your repository" }
+        );
+    }
     0
 }
 
