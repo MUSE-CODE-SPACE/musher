@@ -334,3 +334,30 @@ mod tests {
         assert!(lines[1].contains("working") && lines[1].contains("Edit src/main.rs") && lines[1].contains("$0.50"));
     }
 }
+
+/// `--json`: nothing on stdout but the final JSON; progress goes to stderr so pipes stay clean.
+pub struct Quiet(Plain);
+
+impl Quiet {
+    pub fn new() -> Quiet {
+        Quiet(Plain::new())
+    }
+}
+
+impl Observer for Quiet {
+    fn tick(&mut self, run: &Run) {
+        let s = run.snapshot();
+        for t in &s.tasks {
+            if self.0.seen.get(&t.id) != Some(&t.status) {
+                if t.status != Status::Queued || self.0.seen.contains_key(&t.id) {
+                    eprintln!("[{}] {:<10} {}", fmt_dur(now().saturating_sub(s.started)), t.id, t.status.as_str());
+                }
+                self.0.seen.insert(t.id.clone(), t.status);
+            }
+        }
+    }
+    fn finish(&mut self, run: &Run) {
+        let s = run.snapshot();
+        notify(&s, s.tasks.iter().all(|t| t.status == Status::Done));
+    }
+}

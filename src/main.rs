@@ -399,8 +399,13 @@ fn drive(e: &Env, plan: Plan, run: Arc<Run>, args: &Args) -> i32 {
     run.update(|s| s.pid = std::process::id());
     run::install_signal_handlers();
     let ctx = Arc::new(Ctx { root: e.root.clone(), home: e.home.clone(), plan, run });
-    let mut obs: Box<dyn Observer> =
-        if args.has("--no-ui") || !std::io::stdout().is_terminal() { Box::new(ui::Plain::new()) } else { Box::new(ui::Live::new()) };
+    let mut obs: Box<dyn Observer> = if args.has("--json") {
+        Box::new(ui::Quiet::new())
+    } else if args.has("--no-ui") || !std::io::stdout().is_terminal() {
+        Box::new(ui::Plain::new())
+    } else {
+        Box::new(ui::Live::new())
+    };
     let ok = run::execute(ctx.clone(), obs.as_mut());
     if args.has("--json") {
         println!("{}", serde_json::to_string_pretty(&ctx.run.snapshot()).unwrap());

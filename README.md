@@ -128,7 +128,7 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 
 | | |
 |---|---|
-| `musher run [-j N] [--only a,b] [--dry-run] [--bg]` | run the plan (`--only` pulls in dependencies) |
+| `musher run [-j N] [--only a,b] [--dry-run] [--bg] [--json]` | run the plan (`--only` pulls in dependencies; `--json` prints only the final state on stdout, progress on stderr) |
 | `musher do "<prompt>" [--agent] [--check] [--id] [--model] [--bg]` | one-off task |
 | `musher plan "<goal>" [--out f] [--print] [--force] [--model m]` | an agent reads the repo and writes `musher.toml`: 2–6 tasks with checks and dependencies; your `[settings]` are kept. `--model` is used for planning and set on every task it writes |
 | `musher resume [run]` | continue a stopped or failed run |
