@@ -1597,7 +1597,9 @@ fn cmd_mem(args: &Args) -> i32 {
     if !cur.is_empty() && !cur.ends_with('\n') {
         cur.push('\n');
     }
-    cur.push_str(&format!("- {}\n", note.trim()));
+    // One bullet per note; a multi-line note keeps its lines inside that bullet.
+    let note = note.trim().lines().map(str::trim_end).collect::<Vec<_>>().join("\n  ");
+    cur.push_str(&format!("- {note}\n"));
     fs::write(&path, cur).unwrap_or_else(|err| die(&err.to_string()));
     println!("noted");
     0
