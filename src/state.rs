@@ -242,13 +242,26 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Local broken-down time for a unix timestamp (no `date` subprocess: GNU and BSD differ).
+pub fn local_time(ts: u64) -> libc::tm {
+    let t = ts as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&t, &mut tm);
+    }
+    tm
+}
+
+/// `HH:MM:SS` in local time.
+pub fn fmt_clock(ts: u64) -> String {
+    let tm = local_time(ts);
+    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
 /// Run ids sort by time: `YYMMDD-HHMMSS` in local time.
 pub fn new_run_id() -> String {
-    let out = std::process::Command::new("date").arg("+%y%m%d-%H%M%S").output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => format!("r{}", now()),
-    }
+    let tm = local_time(now());
+    format!("{:02}{:02}{:02}-{:02}{:02}{:02}", (tm.tm_year + 1900) % 100, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
 pub fn uuid_v4() -> String {
@@ -296,6 +309,17 @@ pub fn fmt_dur(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_and_run_id_shapes() {
+        let id = new_run_id();
+        assert_eq!(id.len(), 13);
+        assert_eq!(&id[6..7], "-");
+        assert!(id.chars().filter(|c| c.is_ascii_digit()).count() == 12);
+        let c = fmt_clock(now());
+        assert_eq!(c.len(), 8);
+        assert_eq!(&c[2..3], ":");
+    }
 
     #[test]
     fn uuid_shape() {

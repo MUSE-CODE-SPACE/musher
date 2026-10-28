@@ -1127,8 +1127,7 @@ fn cmd_events(args: &Args) -> i32 {
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(l) {
             let ts = v["ts"].as_u64().unwrap_or(0);
-            let t = Command::new("date").args(["-r", &ts.to_string(), "+%H:%M:%S"]).output().ok().filter(|o| o.status.success());
-            let clock = t.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|| ts.to_string());
+            let clock = state::fmt_clock(ts);
             println!("{clock}  {:<10} {:<13} {}", v["task"].as_str().unwrap_or("-"), v["kind"].as_str().unwrap_or(""), v["msg"].as_str().unwrap_or(""));
         }
     };
