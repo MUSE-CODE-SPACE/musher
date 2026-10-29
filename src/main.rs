@@ -411,7 +411,8 @@ fn go_background(e: &Env, raw: &[String], run_id: &str) -> i32 {
     let out = fs::File::create(dir.join("musher.out")).unwrap_or_else(|err| die(&format!("cannot write {}: {err}", dir.join("musher.out").display())));
     let mut argv: Vec<String> = raw.iter().filter(|a| *a != "--bg").cloned().collect();
     argv.push("--no-ui".into());
-    if !raw.iter().any(|a| a == "--run-id") && raw[0] != "resume" {
+    // A fresh run gets its id from us; resume and `do --after` attach to an existing one.
+    if !raw.iter().any(|a| a == "--run-id" || a == "--after") && raw[0] != "resume" {
         argv.push("--run-id".into());
         argv.push(run_id.into());
     }
@@ -547,7 +548,7 @@ fn cmd_do(args: &Args, raw: &[String]) -> i32 {
         allow: vec![],
     };
     if !task.after.is_empty() {
-        return do_after(&e, args, task);
+        return do_after(&e, args, raw, task);
     }
     let mut plan = load_plan(&e, args);
     plan.tasks = vec![task];
@@ -562,7 +563,7 @@ fn cmd_do(args: &Args, raw: &[String]) -> i32 {
 
 /// `musher do "…" --after a,b`: append the task to an existing run so it starts from those
 /// tasks' branches (stacked) with their summaries in its prompt.
-fn do_after(e: &Env, args: &Args, task: Task) -> i32 {
+fn do_after(e: &Env, args: &Args, raw: &[String], task: Task) -> i32 {
     let dir = find_run(e, args);
     let st = load_state(&dir).unwrap_or_else(|err| die(&err));
     if !st.finished && pid_alive(st.pid) {
@@ -579,7 +580,12 @@ fn do_after(e: &Env, args: &Args, task: Task) -> i32 {
         }
     }
     if args.has("--bg") {
-        die("--after and --bg do not combine yet; run it in the foreground");
+        let mut raw2: Vec<String> = raw.to_vec();
+        if args.get("--run").is_none() {
+            raw2.push("--run".into());
+            raw2.push(st.id.clone());
+        }
+        return go_background(e, &raw2, &st.id);
     }
     let mut plan = load_run_plan(&dir);
     apply_overrides(&mut plan, args);
