@@ -12,6 +12,8 @@ description: Delegate coding work to a team of parallel agents with musher. Each
 ```sh
 musher do "<precise instructions>" --id <short-id> --check "<test command>" --bg
 musher wait --json        # exit 0 = done; read .tasks[].status / .note
+musher wait --input       # also returns (exit 3) when a task waits for approval
+musher approve <task>     # or: musher deny <task> -m "why" (only with the person's say-so)
 musher diff <short-id> --stat
 ```
 

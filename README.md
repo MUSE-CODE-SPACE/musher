@@ -120,7 +120,8 @@ queued ─▶ setup ─▶ working ─▶ (commit) ─▶ checking ─┬─▶ 
 ```
 
 * **failed**: the agent errored, timed out, or the check still failed after all retries.
-* **blocked**: the check is failing *and* the agent was denied a tool it asked for (run `musher attach <task>` and grant it), or the agent hit a usage limit, quota or auth error. Those are not retried: a person has to act, then `musher resume`.
+* **waiting**: the agent asked for something it needs permission for and is held until you answer: `musher approve <task>` (`--always` for the same call for the rest of the run) or `musher deny <task> -m "why"`. You get a desktop notification and the `on_approval` hook; the time does not count against `timeout`. After `approval_timeout` (30m) it is denied. With `approval = "deny"` or `$CI` set, nothing waits. Claude only for now; Codex and Gemini run with their own sandbox flags.
+* **blocked**: the agent was refused a tool and either the check is failing or nothing changed (`musher ask <task> "…"` or `musher attach <task>`), or the agent hit a usage limit, quota or auth error. Those are not retried: a person has to act, then `musher resume`.
 * **skipped**: a dependency did not finish. The reason is shown.
 * **stopped**: you pressed Ctrl-C. `musher resume` picks up exactly here and keeps finished tasks. If you edited a prompt in `musher.toml` in the meantime, the edit is used.
 
@@ -193,8 +194,8 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 |---|---|---|
 | Core idea | Multiplex interactive agent terminals | Run a graph of agent tasks to a verified result |
 | Runtime model | Background server owns the PTYs | No server: a run is a process plus files in `.musher/` |
-| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.7 MB** (755 KB, measured) |
-| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **3.0 MB RSS** (8 agents, measured) |
+| Binary (macOS arm64) | **22.5 MB** (v0.9.5, measured) | **0.8 MB** (770 KB, measured) |
+| Memory while agents work | **46.5 MB RSS**: server 29.5 + client 17.0 (2 agents, measured) | **8.1 MB RSS**: runner 3.0 + approval server 1.7 per agent (3 agents, measured) |
 | Idle cost | Server process stays resident | **Nothing runs** between runs |
 | Agent state | Process name + **screen-pattern manifests**; new prompts "may initially show as `idle` instead of `blocked`"² | **Structured events** from the agent (session id, tools, cost, final answer, permission denials) plus exit codes |
 | Isolation between agents | Worktree workspaces **on request** (`herdr worktree create`); by default panes share one checkout | **Worktree + branch per task**, automatic, stacked by dependency |
@@ -207,12 +208,27 @@ A ready-made Claude Code skill lives in [`skills/musher/SKILL.md`](skills/musher
 | Cost control | — | Cost per task and run, `budget_usd` |
 | Planning | You type into each pane | `musher plan "<goal>"` drafts the task graph from the repo |
 | Landing the work | Manual | `musher diff`, `musher merge` (dependency order), `musher pr` (one PR per task), `musher report` |
-| Notifications | Sounds in the UI | `on_task` / `on_finish` shell hooks (Slack, ntfy, anything) |
+| Permission prompts | Dialog in the pane; one key to answer, right there | Agent held, `musher approve` from any terminal, `on_approval` hook to reach your phone |
+| Notifications | Sounds in the UI | `on_task` / `on_approval` / `on_finish` shell hooks (Slack, ntfy, anything) |
 | Watching agents type live, mouse, splits | **Yes, this is Herdr's strength** | Not a multiplexer: `logs -f`, `watch`, `attach` |
 | Remote thin client, plugin marketplace | **Yes** | No (it's a CLI; run it over SSH) |
 | Config | `config.toml` (keys, UI, sounds) | `musher.toml` (tasks), strict validation |
 
 ² From Herdr's own v0.9.5 docs ([agents](https://herdr.dev/docs/agents), [session state](https://herdr.dev/docs/session-state), [CLI reference](https://herdr.dev/docs/cli-reference)) and the [Developers Digest deep dive](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer). All sizes and memory figures were measured side by side on one Apple Silicon Mac (Oct 2026). Herdr ran from its official release binary.
+
+### Measured head to head
+
+Same machine, same Claude Code, same model, three parallel tasks, three trials each, cost computed from session logs with one formula. Scripts, fixtures and raw results: [`benchmarks/2026-11`](benchmarks/2026-11). Small tasks and few trials: read these as direction, not as a law.
+
+| Scenario | Herdr 0.9.5 | musher 0.4.0 |
+|---|---|---|
+| Independent tasks, end to end incl. merge | 25.3 s, $0.64 | **15.3 s, $0.58** |
+| All three edit one file (conflicts) | 81.2 s, $1.11, 2 manual resolves | **54.0 s, $0.74, 0 manual** |
+| Project rules not in the prompt, CI must pass | 38.7 s, $0.83, 4.7 approvals, CI 3/3 | **20.9 s, $0.66, 0 approvals**, CI 3/3 |
+| A command needs permission: time to notice | **1.9 s** (agent already running) | 3.2 s (includes starting the agent) |
+| ...then approve and finish | 7.0 s, one key | 7.8 s, one command |
+
+musher 0.3.5 lost that last scenario outright: the headless agent was refused, gave up, and the task ended `done` without running the command. 0.4.0 exists because of that measurement. Herdr's agents passed CI just as often; what differs is the waiting and the hand work around them.
 
 **Use Herdr** when you want to sit with five live agent UIs side by side and steer them by hand. **Use musher** when you want to hand over a list of tasks, walk away, and come back to tested, isolated branches. You can also use both: run `musher watch` in a Herdr pane.
 

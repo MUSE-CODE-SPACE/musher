@@ -116,7 +116,8 @@ queued ─▶ setup ─▶ working ─▶ (자동 커밋) ─▶ checking ─┬
 ```
 
 * **failed**: 에이전트 오류, 시간 초과, 또는 재시도를 모두 써도 검증 실패
-* **blocked**: 검증이 실패하는데 에이전트가 요청한 도구 권한이 거부된 경우(`musher attach <task>`로 들어가 권한을 주면 됨), 또는 에이전트가 사용 한도·할당량·인증 오류에 걸린 경우. 이런 오류는 재시도하지 않으며, 사람이 조치한 뒤 `musher resume`
+* **waiting**: 에이전트가 권한이 필요한 작업을 요청해 답을 기다리는 상태. `musher approve <task>`(`--always`면 이번 런에서 같은 호출을 계속 허용) 또는 `musher deny <task> -m "이유"`로 답합니다. 데스크톱 알림과 `on_approval` 훅이 울리고, 기다린 시간은 `timeout`에 들어가지 않습니다. `approval_timeout`(30분)이 지나면 거부됩니다. `approval = "deny"`이거나 `$CI`가 있으면 기다리지 않습니다. 지금은 Claude만 지원하며, Codex와 Gemini는 자체 샌드박스 플래그로 실행됩니다.
+* **blocked**: 도구를 거부당했는데 검증이 실패하거나 바뀐 파일이 없는 경우(`musher ask <task> "…"` 또는 `musher attach <task>`), 또는 에이전트가 사용 한도·할당량·인증 오류에 걸린 경우. 이런 오류는 재시도하지 않으며, 사람이 조치한 뒤 `musher resume`
 * **skipped**: 의존 태스크가 완료되지 못함 (사유 표시)
 * **stopped**: Ctrl-C로 중단. `musher resume`을 실행하면 완료된 작업은 그대로 두고 이 지점부터 이어서 진행. 그 사이에 `musher.toml`의 프롬프트를 고쳤다면 수정본이 반영됨
 
@@ -189,8 +190,8 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 |---|---|---|
 | 핵심 개념 | 대화형 에이전트 터미널 다중화 | 에이전트 태스크 그래프를 검증된 결과까지 실행 |
 | 실행 모델 | 백그라운드 서버가 PTY 소유 | 서버 없음: 런 = 프로세스 + `.musher/` 파일 |
-| 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.7 MB** (755 KB 실측) |
-| 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 3.0 MB** (에이전트 8개, 실측) |
+| 바이너리 (macOS arm64) | **22.5 MB** (v0.9.5 실측) | **0.8 MB** (770 KB 실측) |
+| 에이전트 작업 중 메모리 | **RSS 46.5 MB**: 서버 29.5 + 클라이언트 17.0 (에이전트 2개, 실측) | **RSS 8.1 MB**: 러너 3.0 + 에이전트당 승인 서버 1.7 (에이전트 3개, 실측) |
 | 유휴 비용 | 서버 상주 | **아무것도 안 돎** |
 | 상태 판정 | 프로세스명 + **화면 패턴 매니페스트**. 새로운 프롬프트는 "처음에 `blocked` 대신 `idle`로 보일 수 있음"² | 에이전트의 **구조화 이벤트**(세션 id, 도구, 비용, 최종 답, 권한 거부) + 종료 코드 |
 | 에이전트 간 격리 | `herdr worktree create`로 **직접 만들면** 가능. 기본은 패널들이 체크아웃 하나를 공유 | 태스크별 **worktree + 브랜치** 자동, 의존성대로 쌓음 |
@@ -203,11 +204,26 @@ Claude Code용 스킬은 [`skills/musher/SKILL.md`](skills/musher/SKILL.md)에 �
 | 비용 통제 | — | 태스크/런 비용, `budget_usd` |
 | 계획 | 창마다 직접 타이핑 | `musher plan "<목표>"`가 저장소를 읽고 태스크 그래프 초안 작성 |
 | 결과 반영 | 수동 | `musher diff`, `musher merge` (의존성 순), `musher pr` (태스크별 PR), `musher report` |
-| 알림 | UI 효과음 | `on_task` / `on_finish` 셸 훅 (Slack, ntfy 등 무엇이든) |
+| 권한 요청 | 패널 안 대화상자. 그 자리에서 키 하나로 응답 | 에이전트를 붙잡아 두고 어느 터미널에서든 `musher approve`, `on_approval` 훅으로 휴대폰까지 전달 |
+| 알림 | UI 효과음 | `on_task` / `on_approval` / `on_finish` 셸 훅(Slack, ntfy 등) |
 | 에이전트 화면 실시간 보기, 마우스, 분할 | **예 (Herdr의 강점)** | 멀티플렉서 아님: `logs -f`, `watch`, `attach` |
 | 원격 씬 클라이언트, 플러그인 마켓 | **예** | 없음 (CLI이므로 SSH로 사용) |
 
 ² Herdr v0.9.5 공식 문서([agents](https://herdr.dev/docs/agents), [session state](https://herdr.dev/docs/session-state), [CLI reference](https://herdr.dev/docs/cli-reference))와 [Developers Digest 심층 분석](https://www.developersdigest.tech/blog/herdr-deep-dive-agent-terminal-multiplexer) 기준. 크기와 메모리 수치는 모두 Apple Silicon Mac 한 대에서 나란히 직접 측정했습니다(2026년 10월). Herdr는 공식 릴리스 바이너리로 실행했습니다.
+
+### 직접 맞붙여 잰 결과
+
+같은 컴퓨터, 같은 Claude Code, 같은 모델로 병렬 태스크 3개를 시나리오마다 3회씩 쟀습니다. 비용은 세션 로그에서 같은 공식으로 계산했습니다. 스크립트, 픽스처, 원본 결과는 [`benchmarks/2026-11`](benchmarks/2026-11)에 있습니다. 작은 태스크에 3회라 방향을 보는 수치로 읽어 주세요.
+
+| 시나리오 | Herdr 0.9.5 | musher 0.4.0 |
+|---|---|---|
+| 서로 독립인 태스크, 머지까지 | 25.3초, $0.64 | **15.3초, $0.58** |
+| 셋 다 같은 파일 수정(충돌) | 81.2초, $1.11, 수동 해결 2번 | **54.0초, $0.74, 수동 0번** |
+| 프롬프트에 없는 프로젝트 규칙, CI 통과 필수 | 38.7초, $0.83, 승인 4.7번, CI 3/3 | **20.9초, $0.66, 승인 0번**, CI 3/3 |
+| 명령에 권한이 필요할 때 알아채는 시간 | **1.9초** (에이전트가 이미 떠 있음) | 3.2초 (에이전트 시작 포함) |
+| 승인 후 완료까지 | 7.0초, 키 하나 | 7.8초, 명령 하나 |
+
+musher 0.3.5는 마지막 시나리오에서 완전히 졌습니다. 헤드리스 에이전트가 거부당해 포기했는데, 명령을 실행하지도 않은 태스크가 `done`으로 끝났습니다. 0.4.0은 이 측정 때문에 나왔습니다. CI 통과율은 Herdr도 같았고, 차이는 그 주변의 대기와 손작업입니다.
 
 **Herdr가 맞는 경우**: 에이전트 5개의 화면을 나란히 띄워 놓고 직접 조종하고 싶을 때. **musher가 맞는 경우**: 할 일 목록을 맡기고 자리를 비운 뒤, 돌아와서 테스트를 통과한 격리 브랜치를 받고 싶을 때. 둘을 함께 써도 됩니다. Herdr 패널 하나에서 `musher watch`를 띄우면 됩니다.
 

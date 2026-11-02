@@ -147,7 +147,7 @@ pub fn render(s: &RunState, frame: usize, width: usize, c: bool) -> Vec<String> 
     for t in &s.tasks {
         let (g, col) = glyph(t.status, frame);
         let money = fmt_cost(t.cost_usd);
-        let detail = if t.status.is_active() && !t.activity.is_empty() {
+        let detail = if t.status.is_active() && t.status != Status::Waiting && !t.activity.is_empty() {
             t.activity.clone()
         } else if t.status == Status::Queued && !t.after.is_empty() {
             format!("after {}", t.after.join(", "))
@@ -327,7 +327,7 @@ pub fn notify_text(msg: &str) {
         let script = format!("display notification {:?} with title \"musher\"", msg);
         let _ = std::process::Command::new("osascript").args(["-e", &script]).output();
     } else {
-        let _ = std::process::Command::new("notify-send").args(["musher", &msg]).output();
+        let _ = std::process::Command::new("notify-send").args(["musher", msg]).output();
     }
 }
 

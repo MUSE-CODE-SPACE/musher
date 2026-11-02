@@ -1,6 +1,6 @@
 #!/bin/sh
 # End-to-end regression: the whole lifecycle with the shell agent, no API keys.
-# run → stop mid-way → resume → hand-fix + check → hooks → report → merge → pr guard → clean.
+# run → stop mid-way → resume → hand-fix + check → hooks → report → merge → pr guard → clean → approvals.
 # Exits non-zero on the first wrong answer. Used by CI and `make`-less local runs:
 #   MUSHER=target/release/musher sh tests/regression.sh
 set -eu
@@ -78,4 +78,47 @@ echo "== clean"
 [ "$(git branch --list 'musher/*' | wc -l | tr -d ' ')" = 0 ] || fail "branches left after --purge"
 
 cd /; rm -rf "$repo"
+echo "== approvals: a held task shows as waiting, approve/deny answer it, hook fires"
+repo3=$(mktemp -d "${TMPDIR:-/tmp}/musher-reg.XXXXXX")
+cd "$repo3"
+git init -q -b main
+git -c user.name=t -c user.email=t@localhost commit -q --allow-empty -m init
+cat > fake-agent.sh <<EOF
+#!/bin/sh
+# Speaks the MCP call a real agent would make, through musher's own approval server.
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{"command":"npm test"}}}}' \
+  | "$musher" __approve "\$MUSHER_ROOT/.musher/runs/\$MUSHER_RUN" "\$MUSHER_TASK" 30 > "\$MUSHER_TASK.answer"
+echo finished
+EOF
+cat > musher.toml <<'EOF'
+[settings]
+agent = "fake"
+on_approval = "echo $MUSHER_TASK >> $MUSHER_ROOT/approval-hook.txt"
+[agents.fake]
+cmd = ["sh", "{cwd}/../../../../fake-agent.sh"]
+raw = true
+[[task]]
+id = "yes"
+prompt = "x"
+[[task]]
+id = "no"
+prompt = "x"
+EOF
+"$musher" init >/dev/null 2>&1 || true
+"$musher" run --bg --no-notify >/dev/null
+i=0
+until [ "$("$musher" status --json | grep -c '"status": "waiting"')" = 2 ]; do
+  i=$((i+1)); [ $i -lt 100 ] || fail "tasks should be waiting"; sleep 0.1
+done
+"$musher" approve 2>&1 | grep -q "name one" || fail "two waiting: approve must ask which"
+rc=0; "$musher" wait --input || rc=$?; [ $rc = 3 ] || fail "wait --input should exit 3"
+"$musher" approve yes | grep -q "npm test" || fail "approve should say what it allowed"
+"$musher" deny no -m "not now" >/dev/null
+"$musher" wait >/dev/null || true
+grep -q allow .musher/wt/*/yes/yes.answer || fail "approve should reach the agent as allow"
+grep -q "not now" .musher/wt/*/no/no.answer || fail "deny should carry the message"
+[ "$(wc -l < approval-hook.txt | tr -d ' ')" = 2 ] || fail "on_approval should fire once per task"
+"$musher" approve 2>/dev/null && fail "nothing should be waiting now"
+cd /; rm -rf "$repo3"
+
 echo "regression OK"
