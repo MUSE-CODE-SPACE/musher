@@ -426,14 +426,21 @@ fn go_background(e: &Env, raw: &[String], run_id: &str) -> i32 {
         .process_group(0)
         .spawn()
         .unwrap_or_else(|err| die(&format!("cannot start background run: {err}")));
-    // Return only once the run is visible, so `musher wait/watch` right after cannot miss it.
+    // Return only once the child owns the run, so `musher wait/watch` right after cannot see an
+    // old finished state (resume and `do --after` reuse an existing state.json).
+    let existed = dir.join("state.json").exists();
     for _ in 0..100 {
-        if dir.join("state.json").exists() {
+        if load_state(&dir).is_ok_and(|st| st.pid == child.id() && !st.finished) {
             break;
         }
         if let Ok(Some(st)) = child.try_wait() {
+            if st.success() || dir.join("state.json").exists() {
+                break; // finished already, or failed after the run existed: its record stays
+            }
             let out = fs::read_to_string(dir.join("musher.out")).unwrap_or_default();
-            let _ = fs::remove_dir_all(&dir);
+            if !existed {
+                let _ = fs::remove_dir_all(&dir);
+            }
             die(&format!("background run exited ({st}): {}", out.trim()));
         }
         std::thread::sleep(Duration::from_millis(50));
