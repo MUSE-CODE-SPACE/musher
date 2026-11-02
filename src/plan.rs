@@ -47,6 +47,13 @@ pub struct Settings {
     /// Shell command run once when the run ends. Env: MUSHER_RUN, MUSHER_STATUS (done|incomplete|stopped),
     /// MUSHER_COST, MUSHER_DONE, MUSHER_TOTAL, MUSHER_REPORT (path to the markdown report).
     pub on_finish: Option<String>,
+    /// Shell command run when a task starts waiting for approval. Env: MUSHER_RUN, MUSHER_TASK, MUSHER_NOTE.
+    pub on_approval: Option<String>,
+    /// What a tool call that needs permission does: "ask" holds the agent until `musher approve`
+    /// or `musher deny`; "deny" refuses it at once. With $CI set, "ask" behaves as "deny".
+    pub approval: String,
+    /// How long "ask" waits before denying. Does not count against the task's `timeout`.
+    pub approval_timeout: String,
 }
 
 impl Default for Settings {
@@ -65,6 +72,9 @@ impl Default for Settings {
             allow: Vec::new(),
             on_task: None,
             on_finish: None,
+            on_approval: None,
+            approval: "ask".into(),
+            approval_timeout: "30m".into(),
         }
     }
 }
@@ -131,6 +141,8 @@ pub fn builtin_agents() -> BTreeMap<String, AgentSpec> {
                 "--permission-mode",
                 "{permission}",
                 "{allow:--allowedTools}",
+                "{mcp:--mcp-config}",
+                "{prompt_tool:--permission-prompt-tool}",
                 "{model:--model}",
             ]),
             resume: v(&[
@@ -145,6 +157,8 @@ pub fn builtin_agents() -> BTreeMap<String, AgentSpec> {
                 "--permission-mode",
                 "{permission}",
                 "{allow:--allowedTools}",
+                "{mcp:--mcp-config}",
+                "{prompt_tool:--permission-prompt-tool}",
                 "{model:--model}",
             ]),
             attach: v(&["claude", "--resume", "{session}"]),
@@ -318,6 +332,9 @@ permission = "acceptEdits"
 # budget_usd = 5.0        # stop scheduling new tasks after this spend
 # allow    = ["Bash(npm run lint:*)"]   # extra tools allowed without asking (each task's check is always allowed)
 # on_task   = "say \"$MUSHER_TASK $MUSHER_STATUS\""                 # hook after each task (env: MUSHER_TASK/STATUS/NOTE/COST)
+# approval = "ask"        # a tool call that needs permission waits for `musher approve` ("deny" refuses at once)
+# approval_timeout = "30m"
+# on_approval = "curl -sS -d \"$MUSHER_TASK: $MUSHER_NOTE\" ntfy.sh/my-topic"    # hook when a task starts waiting for you
 # on_finish = "curl -sS -d \"musher: $MUSHER_STATUS $MUSHER_DONE/$MUSHER_TOTAL\" ntfy.sh/my-topic"   # hook when the run ends
 
 [[task]]

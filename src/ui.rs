@@ -109,6 +109,7 @@ fn glyph(s: Status, frame: usize) -> (&'static str, &'static str) {
         Status::Working => (SPIN[frame % 4], "33"),
         Status::Checking => (SPIN[frame % 4], "36"),
         Status::Fixing => (SPIN[frame % 4], "35"),
+        Status::Waiting => ("?", "33;1"),
     }
 }
 
@@ -169,7 +170,7 @@ pub fn render(s: &RunState, frame: usize, width: usize, c: bool) -> Vec<String> 
         let visible_left = 1 + 1 + 1 + idw + 2 + 8 + 1 + 6 + 1 + 6 + 2;
         let room = width.saturating_sub(visible_left + 1).max(10);
         let detail = clip(&detail, room);
-        let detail = if matches!(t.status, Status::Failed | Status::Blocked) { paint(c, col, &detail) } else { paint(c, "2", &detail) };
+        let detail = if matches!(t.status, Status::Failed | Status::Blocked | Status::Waiting) { paint(c, col, &detail) } else { paint(c, "2", &detail) };
         out.push(format!("{left}{detail}"));
     }
     out
@@ -310,12 +311,16 @@ pub fn set_notify(on: bool) {
 }
 
 fn notify(s: &RunState, ok: bool) {
-    if !NOTIFY.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
     let done = s.tasks.iter().filter(|t| t.status == Status::Done).count();
     let msg =
         if ok { format!("All {} tasks done {}", s.tasks.len(), fmt_cost(s.cost())) } else { format!("{done}/{} done — some tasks need you", s.tasks.len()) };
+    notify_text(&msg);
+}
+
+pub fn notify_text(msg: &str) {
+    if !NOTIFY.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     print!("\x07");
     let _ = std::io::stdout().flush();
     if cfg!(target_os = "macos") {

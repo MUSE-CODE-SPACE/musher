@@ -2,6 +2,7 @@
 //! worktree → (stack dependency branches) → setup → agent → commit → check → fix loop → summary.
 
 use crate::agent::{self, Vars};
+use crate::approve;
 use crate::git;
 use crate::plan::{parse_duration, AgentSpec, Plan, Task};
 use crate::state::{now, uuid_v4, Run, Status};
@@ -277,6 +278,12 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         t.check = None;
     });
 
+    // Only agents whose argv has the placeholders can ask; the rest behave as before.
+    let can_ask = ctx.plan.settings.approval == "ask" && std::env::var_os("CI").is_none();
+    let approval_limit = parse_duration(&ctx.plan.settings.approval_timeout).unwrap_or(1800);
+    let mcp = if can_ask { approve::mcp_config(&run.dir, id, approval_limit) } else { String::new() };
+    let prompt_tool = if can_ask { approve::TOOL } else { "" };
+
     let mut feedback: Option<String> = followup.map(String::from);
     let mut last_summary = String::new();
     let mut denied: Vec<String> = Vec::new();
@@ -302,7 +309,10 @@ fn run_task_inner(ctx: &Ctx, id: &str, followup: Option<&str>) {
         let note = if attempt > 0 { format!("attempt {}", attempt + 1) } else { String::new() };
         run.set_status(id, status, &note);
 
-        let argv = agent::build_argv(argv_t, &Vars { prompt: &prompt, session: &session, cwd: &cwd_s, permission: &permission, model: &model, allow: &allow });
+        let argv = agent::build_argv(
+            argv_t,
+            &Vars { prompt: &prompt, session: &session, cwd: &cwd_s, permission: &permission, model: &model, allow: &allow, mcp: &mcp, prompt_tool },
+        );
         log.section(&format!("{} attempt {} — {}", status.as_str(), attempt + 1, shell_preview(&argv)));
         if !spec.raw {
             log.line(&format!("[prompt]\n{}\n[/prompt]", prompt.trim_end()));
@@ -494,6 +504,12 @@ fn finish_done(ctx: &Ctx, id: &str, cwd: &Path, base: &str, summary: &str, denie
     let _ = fs::write(ctx.run.out_path(id), summary);
     ctx.run.task(id, |t| t.files_changed = files);
     let note = if denied.is_empty() { String::new() } else { format!("denied: {}", denied.join(", ")) };
+    let verified = ctx.run.snapshot().task(id).is_some_and(|t| t.check == Some(true));
+    if !denied.is_empty() && files == 0 && !verified {
+        // Refused, nothing changed, nothing verified: that is not a finished task.
+        ctx.run.set_status(id, Status::Blocked, &format!("{note}; nothing changed — `musher ask {id} \"…\"` or `musher attach {id}`"));
+        return;
+    }
     ctx.run.set_status(id, Status::Done, &note);
 }
 
@@ -590,6 +606,8 @@ fn stack_deps(ctx: &Ctx, task: &Task, spec: &AgentSpec, cwd: &Path, inv: &Invoke
                 permission: &inv.permission,
                 model: &inv.model,
                 allow: &inv.allow,
+                mcp: "",
+                prompt_tool: "",
             },
         );
         log.line(&format!("[prompt]\n{}\n[/prompt]", prompt.trim_end()));
@@ -770,15 +788,45 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
         (summary, error, denied, is_error)
     });
 
-    let start = Instant::now();
+    let mut deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut held: Option<(String, Status, String, Instant)> = None;
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {}
             Err(_) => break None,
         }
-        if STOP.load(Ordering::SeqCst) || start.elapsed() > timeout {
+        // A person thinking is not the agent being slow: time spent waiting moves the deadline.
+        let req = approve::pending(&run.dir, id);
+        match (&req, &held) {
+            (Some(r), h) if h.as_ref().map(|x| x.0.as_str()) != Some(r.id.as_str()) => {
+                let snap = run.snapshot();
+                let (prev, prev_note) = match h {
+                    Some(x) => (x.1, x.2.clone()),
+                    None => snap.task(id).map(|t| (t.status, t.note.clone())).unwrap_or((Status::Working, String::new())),
+                };
+                let waited = h.as_ref().map(|x| x.3).unwrap_or_else(Instant::now);
+                let note = agent::clip(&format!("{}: {}  → musher approve {id}", r.tool, r.what), 160);
+                run.set_status(id, Status::Waiting, &note);
+                run.save();
+                log.line(&format!("== waiting for approval: {}: {}", r.tool, r.what));
+                crate::ui::notify_text(&format!("{id} needs approval: {}", agent::clip(&r.what, 80)));
+                if let Some(cmd) = &ctx.plan.settings.on_approval {
+                    run_hook(ctx, id, cmd, vec![("MUSHER_RUN", rid.clone()), ("MUSHER_TASK", id.to_string()), ("MUSHER_NOTE", note)]);
+                }
+                held = Some((r.id.clone(), prev, prev_note, waited));
+            }
+            (None, Some(h)) => {
+                deadline += h.3.elapsed();
+                run.set_status(id, h.1, &h.2);
+                run.save();
+                log.line("== approval answered");
+                held = None;
+            }
+            _ => {}
+        }
+        if STOP.load(Ordering::SeqCst) || (held.is_none() && Instant::now() > deadline) {
             timed_out = !STOP.load(Ordering::SeqCst);
             kill_group(pid);
             break child.wait().ok();
@@ -787,6 +835,10 @@ fn run_agent(ctx: &Ctx, id: &str, argv: &[String], cwd: &Path, timeout: Duration
     };
     reap(pid);
     run.task(id, |t| t.pid = 0);
+    approve::clear(&run.dir, id);
+    if let Some(h) = held {
+        run.set_status(id, h.1, &h.2);
+    }
     let (summary, mut error, denied, is_error) = out_thread.join().unwrap_or_default();
     let err_tail = feedback_safe(&err_thread.join().unwrap_or_default());
     let code = status.and_then(|s| s.code()).unwrap_or(-1);

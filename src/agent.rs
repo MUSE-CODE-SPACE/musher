@@ -13,6 +13,9 @@ pub struct Vars<'a> {
     pub permission: &'a str,
     pub model: &'a str,
     pub allow: &'a str,
+    /// `--mcp-config` value for the approval server; empty means no approvals.
+    pub mcp: &'a str,
+    pub prompt_tool: &'a str,
 }
 
 /// Expand placeholders. `{model:--model}` becomes `--model <m>` when a model is set and
@@ -20,7 +23,7 @@ pub struct Vars<'a> {
 pub fn build_argv(template: &[String], v: &Vars) -> Vec<String> {
     let mut out = Vec::with_capacity(template.len());
     for arg in template {
-        let optional = [("{model:", v.model), ("{allow:", v.allow)];
+        let optional = [("{model:", v.model), ("{allow:", v.allow), ("{mcp:", v.mcp), ("{prompt_tool:", v.prompt_tool)];
         if let Some((flag, val)) = optional.iter().find_map(|(p, val)| arg.strip_prefix(p).and_then(|r| r.strip_suffix('}')).map(|f| (f, *val))) {
             if !val.is_empty() {
                 out.push(flag.to_string());
@@ -249,7 +252,7 @@ mod tests {
 
     #[test]
     fn argv_placeholders() {
-        let vars = Vars { prompt: "do it", session: "", cwd: "/w", permission: "plan", model: "", allow: "" };
+        let vars = Vars { prompt: "do it", session: "", cwd: "/w", permission: "plan", model: "", allow: "", mcp: "", prompt_tool: "" };
         let argv = build_argv(&s(&["claude", "-p", "{prompt}", "--resume", "{session}", "{model:--model}", "--permission-mode", "{permission}"]), &vars);
         assert_eq!(argv, s(&["claude", "-p", "do it", "--permission-mode", "plan"]));
         let vars = Vars { model: "opus", session: "abc", ..vars };
@@ -261,7 +264,16 @@ mod tests {
 
     #[test]
     fn placeholders_inside_the_prompt_survive() {
-        let vars = Vars { prompt: "mention {cwd} and {session} and {prompt}", session: "S", cwd: "/w", permission: "p", model: "", allow: "" };
+        let vars = Vars {
+            prompt: "mention {cwd} and {session} and {prompt}",
+            session: "S",
+            cwd: "/w",
+            permission: "p",
+            model: "",
+            allow: "",
+            mcp: "",
+            prompt_tool: "",
+        };
         let argv = build_argv(&s(&["x", "{prompt}", "{cwd}"]), &vars);
         assert_eq!(argv, s(&["x", "mention {cwd} and {session} and {prompt}", "/w"]));
     }

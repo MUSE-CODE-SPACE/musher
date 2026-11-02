@@ -18,6 +18,8 @@ pub enum Status {
     Working,
     Checking,
     Fixing,
+    /// Held by a permission request until someone runs `musher approve` or `musher deny`.
+    Waiting,
     Done,
     Failed,
     Blocked,
@@ -30,7 +32,7 @@ impl Status {
         matches!(self, Status::Done | Status::Failed | Status::Blocked | Status::Skipped | Status::Stopped)
     }
     pub fn is_active(self) -> bool {
-        matches!(self, Status::Setup | Status::Working | Status::Checking | Status::Fixing)
+        matches!(self, Status::Setup | Status::Working | Status::Checking | Status::Fixing | Status::Waiting)
     }
     pub fn as_str(self) -> &'static str {
         match self {
@@ -39,6 +41,7 @@ impl Status {
             Status::Working => "working",
             Status::Checking => "checking",
             Status::Fixing => "fixing",
+            Status::Waiting => "waiting",
             Status::Done => "done",
             Status::Failed => "failed",
             Status::Blocked => "blocked",

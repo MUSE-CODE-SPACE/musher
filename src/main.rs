@@ -1,4 +1,5 @@
 mod agent;
+mod approve;
 mod git;
 mod plan;
 mod report;
@@ -34,6 +35,7 @@ USAGE
   musher watch [run]                live dashboard from any terminal
   musher status [run] [--json]      snapshot of a run
   musher wait [run]                 block until a run finishes (exit 0 = all done)
+                                    --input: also return (exit 3) as soon as a task waits for approval
   musher ls [--json]                list runs
   musher report [run] [tasks...]    markdown report: status, time, cost, files, each task's summary
   musher logs <task> [-f]           raw agent + check output
@@ -42,6 +44,8 @@ USAGE
   musher diff <task> [--stat]       what a task changed (--all: including stacked deps)
   musher ask <task> \"<message>\"     follow up in the task's agent session, then re-check
   musher check <task>               after editing the worktree yourself: commit and re-run the check, no agent
+  musher approve [task] [--always]  allow what a waiting task asked for (--always: same call, whole run)
+  musher deny [task] [-m why]       refuse it; the agent gets the reason and carries on
   musher attach <task>              open the task's session interactively in its worktree
   musher merge [task...]            merge finished task branches into your current branch
   musher merge --resolve            let an agent integrate all finished tasks (conflicts too), verify, then merge
@@ -68,6 +72,7 @@ struct Args {
 const VALUE_FLAGS: &[&str] = &[
     "-f",
     "-j",
+    "-m",
     "--only",
     "--run",
     "--agent",
@@ -181,6 +186,9 @@ fn main() {
         "ask" => cmd_ask(&args),
         "check" | "verify" => cmd_check(&args),
         "attach" => cmd_attach(&args),
+        "approve" | "allow" => cmd_approve(&args, true),
+        "deny" => cmd_approve(&args, false),
+        "__approve" => cmd_approve_server(&args),
         "merge" => cmd_merge(&args),
         "mem" | "memory" => cmd_mem(&args),
         "clean" => cmd_clean(&args),
@@ -284,6 +292,14 @@ fn select_tasks(p: &mut Plan, only: &str, no_deps: bool) {
     }
 }
 
+/// Git cannot hold both a branch `musher` and branches `musher/<run>/<task>`: say so before
+/// any task starts, instead of failing each one with a raw ref error.
+fn check_branch_namespace(e: &Env) {
+    if git::branch_exists(&e.root, "musher") {
+        die("a branch named `musher` blocks task branches (musher/<run>/<task>) — rename it first: git branch -m musher musher-main");
+    }
+}
+
 /// Permission modes worth a word before anything runs (printed by run, do and --bg alike).
 fn warn_plan(plan: &Plan) {
     // Claude's "plan" mode is read-only: a task that must pass a check cannot change anything.
@@ -332,6 +348,7 @@ fn new_run(e: &Env, plan: &Plan, args: &Args) -> Arc<Run> {
             die("worktree isolation needs a git repository (git init && git commit), or pass --no-worktree");
         }
         let head = git::head(&e.root).unwrap_or_else(|err| die(&err));
+        check_branch_namespace(e);
         if git::is_dirty(&e.root) {
             eprintln!("musher: note — uncommitted changes are not visible to agents (worktrees start from HEAD)");
         }
@@ -503,6 +520,7 @@ fn new_run_preflight(e: &Env, plan: &Plan) {
             die("worktree isolation needs a git repository, or pass --no-worktree");
         }
         git::head(&e.root).unwrap_or_else(|err| die(&err));
+        check_branch_namespace(e);
     }
 }
 
@@ -802,8 +820,21 @@ fn cmd_wait(args: &Args) -> i32 {
         Some(id) => run_dir(&e, id),
         None => find_run(&e, args),
     };
+    let mut told = false;
     loop {
         if let Ok(st) = load_state(&dir) {
+            if st.tasks.iter().any(|t| t.status == Status::Waiting) && !st.finished {
+                if args.has("--input") {
+                    if args.has("--json") {
+                        println!("{}", serde_json::to_string_pretty(&st).unwrap());
+                    }
+                    return 3;
+                }
+                if !told {
+                    eprintln!("musher: a task is waiting for approval — musher status, then musher approve");
+                    told = true;
+                }
+            }
             if st.finished || (st.pid != 0 && !pid_alive(st.pid)) {
                 if args.has("--json") {
                     println!("{}", serde_json::to_string_pretty(&st).unwrap());
@@ -923,6 +954,9 @@ fn cmd_pr(args: &Args) -> i32 {
         die(&format!("no git remote {remote:?} — add one (`git remote add origin <url>`) or pass --remote"));
     }
     let base = args.get("--base").map(String::from).unwrap_or_else(|| st.base_ref.clone());
+    if base.is_empty() || base == "HEAD" {
+        die("this run started from a detached HEAD — name the target branch with --base <branch>");
+    }
     let mut code = 0;
     for id in ids {
         let Some(t) = st.task(id) else {
@@ -1036,6 +1070,8 @@ fn cmd_plan(args: &Args) -> i32 {
             permission: "plan",
             model: args.get("--model").unwrap_or(&spec.model),
             allow: "",
+            mcp: "",
+            prompt_tool: "",
         },
     );
     eprintln!("musher: asking {name} to plan…");
@@ -1121,7 +1157,7 @@ fn extract_toml(s: &str) -> String {
 
 fn cmd_completions(args: &Args) -> i32 {
     const CMDS: &str =
-        "init run do resume stop plan watch status wait ls report logs events diff ask attach merge pr mem clean doctor completions help version";
+        "init run do resume stop plan watch status wait ls report logs events diff ask attach approve deny merge pr mem clean doctor completions help version";
     const TASK_CMDS: &str = "logs diff ask check attach pr";
     const RUN_CMDS: &str = "resume stop watch wait report";
     match args.pos.first().map(String::as_str) {
@@ -1347,6 +1383,41 @@ fn cmd_diff(args: &Args) -> i32 {
     c.status().map(|s| s.code().unwrap_or(1)).unwrap_or(1)
 }
 
+fn cmd_approve(args: &Args, allow: bool) -> i32 {
+    let e = env();
+    let dir = find_run(&e, args);
+    let waiting = approve::all_pending(&dir);
+    let verb = if allow { "approve" } else { "deny" };
+    let pick: Vec<&approve::Request> = match args.pos.first() {
+        Some(id) => waiting.iter().filter(|r| &r.task == id).collect(),
+        None => waiting.iter().collect(),
+    };
+    if pick.is_empty() {
+        eprintln!("musher: nothing is waiting for approval{}", args.pos.first().map(|t| format!(" on {t}")).unwrap_or_default());
+        return 1;
+    }
+    if pick.len() > 1 {
+        eprintln!("musher: {} tasks are waiting, name one:", pick.len());
+        for r in &pick {
+            eprintln!("  musher {verb} {:<14} {}: {}", r.task, r.tool, agent::clip(&r.what, 90));
+        }
+        return 1;
+    }
+    let r = pick[0];
+    let message = args.get("-m").unwrap_or("");
+    if let Err(err) = approve::answer(&dir, r, allow, allow && args.has("--always"), message) {
+        die(&format!("cannot answer: {err}"));
+    }
+    println!("{} {}: {}: {}", if allow { "approved" } else { "denied" }, r.task, r.tool, r.what);
+    0
+}
+
+fn cmd_approve_server(args: &Args) -> i32 {
+    let (Some(dir), Some(task)) = (args.pos.first(), args.pos.get(1)) else { die("usage: musher __approve <run-dir> <task> [seconds]") };
+    let secs = args.pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1800);
+    approve::serve(Path::new(dir), task, Duration::from_secs(secs))
+}
+
 fn cmd_attach(args: &Args) -> i32 {
     let e = env();
     let (dir, _, t) = run_task_state(&e, args, "usage: musher attach <task>");
@@ -1356,8 +1427,10 @@ fn cmd_attach(args: &Args) -> i32 {
         die(&format!("agent {:?} has no interactive mode — open the worktree yourself: cd {}", t.agent, t.worktree));
     }
     let cwd = if t.worktree.is_empty() { e.root.clone() } else { PathBuf::from(&t.worktree) };
-    let argv =
-        agent::build_argv(&spec.attach, &agent::Vars { prompt: "", session: &t.session, cwd: &cwd.to_string_lossy(), permission: "", model: "", allow: "" });
+    let argv = agent::build_argv(
+        &spec.attach,
+        &agent::Vars { prompt: "", session: &t.session, cwd: &cwd.to_string_lossy(), permission: "", model: "", allow: "", mcp: "", prompt_tool: "" },
+    );
     eprintln!("musher: attaching to {} ({}) in {}", t.id, t.agent, cwd.display());
     eprintln!("musher: when you're done, `musher ask`/`musher resume` pick up from here; changes are committed on the next musher step");
     let err = Command::new(&argv[0]).args(&argv[1..]).current_dir(&cwd).exec();
@@ -1476,6 +1549,9 @@ fn cmd_merge(args: &Args) -> i32 {
         die("your working tree has uncommitted changes — commit or stash them first");
     }
     let here = git::current_ref(&e.root);
+    if here == "HEAD" {
+        eprintln!("musher: warning — detached HEAD: merges land on no branch; `git switch -c <name>` keeps them");
+    }
     if !st.base_ref.is_empty() && st.base_ref != "HEAD" && here != st.base_ref {
         eprintln!("musher: note — merging into `{here}`; the run started from `{}`", st.base_ref);
     }
